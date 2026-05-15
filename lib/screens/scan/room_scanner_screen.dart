@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../services/hardware_service.dart';
+import '../../core/services/hardware_service.dart';
 import '../views/lidar_view.dart';
 import '../views/ar_vision_view.dart';
 import '../views/manual_builder.dart';

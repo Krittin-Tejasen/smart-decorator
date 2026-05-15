@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/hardware_service.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -214,7 +215,13 @@ class HomeScreen extends StatelessWidget {
 
                     onTap: () {
                       debugPrint('LiDAR Scan Tapped');
-
+                      HardwareService.hasLidarSensor().then((hasLidar) {
+                        if (hasLidar) {
+                          debugPrint('Device has LiDAR - Proceed to LiDAR Scan');
+                        } else {
+                          debugPrint('No LiDAR detected - Consider AR Vision Scan');
+                        }
+                      });
                     },
 
                     child: Container(
