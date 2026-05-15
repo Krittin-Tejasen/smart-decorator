@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../services/hardware_service.dart';
-import 'views/lidar_view.dart';
-import 'views/ar_vision_view.dart';
-import 'views/manual_builder.dart';
+import '../views/lidar_view.dart';
+import '../views/ar_vision_view.dart';
+import '../views/manual_builder.dart';
 
 class RoomScannerScreen extends StatefulWidget {
   const RoomScannerScreen({super.key});
