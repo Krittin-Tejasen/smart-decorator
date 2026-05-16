@@ -1,25 +1,62 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/hardware_service.dart';
 
-class HomeScreen extends StatelessWidget {
+import '../../../shared/models/app_state_provider.dart';
+import '../../../shared/models/design_theme.dart';
+import '../../../shared/models/room_type.dart';
+
+class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
 
+    // Sample Room Types
     final roomTypes = [
-      'Living Room',
-      'Bedroom',
-      'Dining Room',
+      RoomType(
+        id: 'living_room',
+        title: 'Living Room',
+        icon: Icons.weekend_rounded,
+      ),
+
+      RoomType(
+        id: 'bedroom',
+        title: 'Bedroom',
+        icon: Icons.bed_rounded,
+      ),
+
+      RoomType(
+        id: 'dining_room',
+        title: 'Dining Room',
+        icon: Icons.table_restaurant_rounded,
+      ),
     ];
 
-    final themeColors = [
-      AppColors.lightCard,
-      AppColors.beige,
-      AppColors.primary,
+    // Sample Theme Colors
+    final themes = [
+      DesignTheme(
+        id: 'minimal',
+        title: 'Minimal',
+        color: AppColors.lightCard,
+      ),
+
+      DesignTheme(
+        id: 'modern',
+        title: 'Modern',
+        color: AppColors.beige,
+      ),
+
+      DesignTheme(
+        id: 'luxury',
+        title: 'Luxury',
+        color: AppColors.primary,
+      ),
     ];
+
+    final appState = ref.watch(appStateProvider);
 
     return Scaffold(
 
@@ -35,6 +72,7 @@ class HomeScreen extends StatelessWidget {
 
                 const SizedBox(height: 20),
 
+                ///////////////  App Title
                 Text.rich(
                   TextSpan(
                     children: [
@@ -60,6 +98,7 @@ class HomeScreen extends StatelessWidget {
 
                 const SizedBox(height: 8),
 
+                ///////////////  App Subtitle
                 const Text(
                   'Scan to Visualize & Shop Your Dream Room',
                   style: TextStyle(
@@ -85,31 +124,52 @@ class HomeScreen extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
 
                   children: roomTypes.map((room) {
+                    return GestureDetector(
+                      onTap: () {
+                        ref
+                          .read(appStateProvider.notifier)
+                          .selectRoomType(room);
+                      },
 
-                    return Container(
-                      width: 100,
-                      padding: const EdgeInsets.all(12),
+                      child: Container(
+                        width: 100,
+                        padding: const EdgeInsets.all(12),
 
-                      decoration: BoxDecoration(
-                        color: AppColors.lightCard,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
+                        decoration: BoxDecoration(
+                          color:
+                            appState.selectedRoomType?.id == room.id
+                              ? Colors.transparent
+                              : AppColors.lightCard,
+                          // color: AppColors.lightCard,
 
-                      child: Column(
-                        children: [
+                          borderRadius: BorderRadius.circular(20),
 
-                          const Icon(
-                            Icons.chair_alt_rounded,
-                            size: 40,
+                          border: Border.all(
+                            color:
+                              appState.selectedRoomType?.id == room.id
+                                  ? AppColors.primary
+                                  : Colors.transparent,
+
+                            width: 3,
                           ),
+                        ),
 
-                          const SizedBox(height: 10),
+                        child: Column(
+                          children: [
 
-                          Text(
-                            room,
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
+                            Icon(
+                              room.icon,
+                              size: 40,
+                            ),
+
+                            const SizedBox(height: 10),
+
+                            Text(
+                              room.title,
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   }).toList(),
@@ -131,14 +191,14 @@ class HomeScreen extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
 
-                  children: themeColors.map((color) {
+                  children: themes.map((theme) {
 
                     return Container(
                       width: 100,
                       height: 100,
 
                       decoration: BoxDecoration(
-                        color: color,
+                        color: theme.color,
                         borderRadius: BorderRadius.circular(20),
                       ),
 
