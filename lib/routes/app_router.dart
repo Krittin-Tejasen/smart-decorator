@@ -3,6 +3,8 @@ import 'package:go_router/go_router.dart';
 
 import '../features/home/presentation/home_screen.dart';
 import '../features/splash/presentation/splash_screen.dart';
+import '../features/processing/presentation/processing_screen.dart';
+
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
@@ -15,5 +17,9 @@ final GoRouter appRouter = GoRouter(
       path: '/home',
       builder: (BuildContext context, GoRouterState state) => const HomeScreen(),
     ),
+    GoRoute(
+      path: '/processing',
+      builder: (BuildContext context, GoRouterState state) => const ProcessingScreen(),
+    )
   ],
 );

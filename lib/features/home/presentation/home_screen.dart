@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/hardware_service.dart';
@@ -336,7 +337,7 @@ class HomeScreen extends ConsumerWidget {
                     ),
                   ),
                 ),
-                
+
                 if (appState.uploadedImage != null) ...[
                   const SizedBox(height: 20),
                   ClipRRect(
@@ -433,6 +434,7 @@ class HomeScreen extends ConsumerWidget {
 
                     onPressed: () {
                       debugPrint('Generate Design Tapped');
+                      context.go('/processing');
                     },
 
                     child: const Text(
