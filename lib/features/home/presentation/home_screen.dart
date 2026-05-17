@@ -91,7 +91,8 @@ class HomeScreen extends ConsumerWidget {
                     ],
                   ),
                   style: TextStyle(
-                    fontSize: 40,
+                    fontSize: 42,
+                    height: 1.2,
                     color: AppColors.darkText,
                   ),
                 ),
@@ -104,6 +105,7 @@ class HomeScreen extends ConsumerWidget {
                   style: TextStyle(
                     fontSize: 18,
                     color: Colors.black54,
+                    height: 1.4,
                   ),
                 ),
 
@@ -131,18 +133,27 @@ class HomeScreen extends ConsumerWidget {
                           .selectRoomType(room);
                       },
 
-                      child: Container(
+                      child: AnimatedContainer(
                         width: 100,
                         padding: const EdgeInsets.all(12),
+                        duration: Duration(milliseconds: 180),
 
                         decoration: BoxDecoration(
                           color:
                             appState.selectedRoomType?.id == room.id
-                              ? Colors.transparent
+                              ? Colors.white
                               : AppColors.lightCard,
                           // color: AppColors.lightCard,
 
                           borderRadius: BorderRadius.circular(20),
+
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.04),
+                              blurRadius: 12,
+                              offset: Offset(0, 4),
+                            )
+                          ],
 
                           border: Border.all(
                             color:
@@ -193,24 +204,59 @@ class HomeScreen extends ConsumerWidget {
 
                   children: themes.map((theme) {
 
-                    return Container(
-                      width: 100,
-                      height: 100,
+                    return GestureDetector(
+                      onTap: () {
+                        ref
+                          .read(appStateProvider.notifier)
+                          .selectTheme(theme);
+                      },
 
-                      decoration: BoxDecoration(
-                        color: theme.color,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
+                      child: AnimatedContainer(
+                        width: 100,
+                        height: 100,
+                        padding: const EdgeInsets.all(12),
+                        duration: Duration(milliseconds: 180),
 
-                      child: const Center(
-                        child: Text(
-                          'Theme',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
+                        decoration: BoxDecoration(
+                          color: theme.color,
+                          borderRadius: BorderRadius.circular(20),
+                          
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.04),
+                              blurRadius: 12,
+                              offset: Offset(0, 4),
+                            )
+                          ],
+
+                          border: Border.all(
+                            color: appState.selectedTheme?.id == theme.id
+                                ? AppColors.primary
+                                : Colors.transparent,
+                            width: 3,
                           ),
                         ),
-                      ),
+
+                        child: Column(
+                          children: [
+                            Icon(
+                              Icons.palette_rounded,
+                              size: 40,
+                              color: Colors.white,
+                            ),
+
+                            const SizedBox(height: 10),
+
+                            Text(
+                              theme.title,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        )
+                      )
                     );
                   }).toList(),
                 ),
