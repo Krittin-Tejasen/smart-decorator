@@ -4,12 +4,33 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/hardware_service.dart';
 
-import '../../../shared/models/app_state_provider.dart';
+import '../../../shared/providers/app_state_provider.dart';
 import '../../../shared/models/design_theme.dart';
 import '../../../shared/models/room_type.dart';
 
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
+
+  Future<void> pickImage(
+    WidgetRef ref,
+  ) async {
+    final picker = ImagePicker();
+
+    final pickedFile =
+      await picker.pickImage(
+        source: ImageSource.gallery,
+      );
+    if (pickedFile != null) {
+      ref
+        .read(appStateProvider.notifier)
+        .setUploadedImage(
+          File(pickedFile.path),
+        );
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -276,38 +297,59 @@ class HomeScreen extends ConsumerWidget {
                 const SizedBox(height: 16),
 
                 ///////////////  Upload Button
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 18,
-                  ),
+                GestureDetector(
+                  onTap: () {
+                    pickImage(ref);
+                  },
 
-                  decoration: BoxDecoration(
-                    color: AppColors.lightCard,
-                    borderRadius: BorderRadius.circular(18),
-                  ),
+                  child: Container(
+                    width: double.infinity,
 
-                  child: const Row(
-                    children: [
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 18,
+                    ),
 
-                      Icon(
-                        Icons.camera_alt_rounded,
-                        color: AppColors.primary,
-                      ),
+                    decoration: BoxDecoration(
+                      color: AppColors.lightCard,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
 
-                      SizedBox(width: 12),
+                    child: const Row(
+                      children: [
 
-                      Text(
-                        'Upload Photo',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w500,
+                        Icon(
+                          Icons.camera_alt_rounded,
+                          color: AppColors.primary,
                         ),
-                      ),
-                    ],
+
+                        SizedBox(width: 12),
+
+                        Text(
+                          'Upload Photo',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
+                
+                if (appState.uploadedImage != null) ...[
+                  const SizedBox(height: 20),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+
+                    child: Image.file(
+                      appState.uploadedImage!,
+                      height: 220,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ],
 
                 const SizedBox(height: 20),
 
