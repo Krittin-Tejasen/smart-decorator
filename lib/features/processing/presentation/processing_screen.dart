@@ -5,6 +5,9 @@ import '../../../core/constants/app_colors.dart';
 
 import '../providers/processing_provider.dart';
 
+import 'package:go_router/go_router.dart';
+import '../../../shared/providers/app_state_provider.dart';
+
 class ProcessingScreen
     extends ConsumerStatefulWidget {
 
@@ -24,18 +27,24 @@ class _ProcessingScreenState
     super.initState();
 
     Future.microtask(() async {
-
       await ref
           .read(processingProvider.notifier)
           .startProcessing();
+
+      ref
+          .read(appStateProvider.notifier)
+          .setFakeResults();
+
+      if (mounted) {
+        context.go('/results');
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
 
-    final processingState =
-        ref.watch(processingProvider);
+    final processingState = ref.watch(processingProvider);
 
     return Scaffold(
 
@@ -65,7 +74,6 @@ class _ProcessingScreenState
                   CrossAxisAlignment.start,
 
               children: [
-
                 const Center(
                   child: Text(
                     'Generating Room Design',

@@ -23,15 +23,19 @@ class ResultsScreen
         ref.watch(appStateProvider);
 
     return Scaffold(
-
       appBar: AppBar(
         title: const Text(
           'Decorated Room',
+          style: TextStyle(
+            height: 1.2,
+            fontSize: 30,
+            fontWeight: FontWeight.bold,
+          ),
         ),
       ),
 
       body: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(15),
 
         child: SingleChildScrollView(
           child: Column(
@@ -80,14 +84,15 @@ class ResultsScreen
                   ),
                 ),
 
+                alignment: Alignment.center,
+
                 child: Text(
                   '${appState.matchedProducts.length} Matching Product Found',
 
+                  textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.white,
-
                     fontSize: 20,
-
                     fontWeight:
                         FontWeight.bold,
                   ),
