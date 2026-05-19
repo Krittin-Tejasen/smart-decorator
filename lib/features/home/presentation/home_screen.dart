@@ -80,6 +80,8 @@ class HomeScreen extends ConsumerWidget {
 
     final appState = ref.watch(appStateProvider);
 
+    final canGenerate = appState.canGenerateDesign;
+
     return Scaffold(
 
       body: SafeArea(
@@ -425,17 +427,22 @@ class HomeScreen extends ConsumerWidget {
 
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
+                      backgroundColor: 
+                        canGenerate
+                          ? AppColors.primary
+                          : AppColors.primary.withValues(alpha: 0.5),
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(18),
                       ),
                     ),
 
-                    onPressed: () {
-                      debugPrint('Generate Design Tapped');
-                      context.go('/processing');
-                    },
+                    onPressed: canGenerate
+                      ? () {
+                        debugPrint('Generate Design Tapped');
+                        context.go('/processing');
+                      }
+                      : null,
 
                     child: const Text(
                       'Generate Design',
@@ -446,6 +453,19 @@ class HomeScreen extends ConsumerWidget {
                     ),
                   ),
                 ),
+
+                if(!canGenerate) ...[
+                  const SizedBox(height: 12),
+                  
+                  const Center(
+                    child: Text(
+                      'Please select room type, theme, and uplaod your room image',
+                      style: TextStyle(
+                        color: Colors.grey
+                      ),
+                    )
+                  )
+                ],
                 const SizedBox(height: 40),
               ],
             ),

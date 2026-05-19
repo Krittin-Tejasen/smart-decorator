@@ -50,6 +50,15 @@ class AppState {
           uploadedImage ?? this.uploadedImage,
     );
   }
+
+  bool get canGenerateDesign {
+    return 
+          selectedRoomType != null 
+          && selectedTheme != null 
+          // && uploadedImage != null
+          ;
+  }
+
 }
 
 class AppStateNotifier 
