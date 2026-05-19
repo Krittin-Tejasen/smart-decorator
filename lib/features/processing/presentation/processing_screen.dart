@@ -27,13 +27,18 @@ class _ProcessingScreenState
     super.initState();
 
     Future.microtask(() async {
-      await ref
-          .read(processingProvider.notifier)
-          .startProcessing();
+      await 
+        ref
+            .read(processingProvider.notifier)
+            .startProcessing();
 
-      ref
-          .read(appStateProvider.notifier)
-          .setFakeResults();
+        ref
+            .read(appStateProvider.notifier)
+            .setFakeResults();
+        
+        ref
+            .read(appStateProvider.notifier)
+            .saveToHistory();
 
       if (mounted) {
         context.go('/results');

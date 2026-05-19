@@ -5,6 +5,7 @@ import 'dart:io';
 import '../models/design_theme.dart';
 import '../models/room_type.dart';
 import '../models/product.dart';
+import '../models/design_history.dart';
 
 class AppState {
 
@@ -14,7 +15,9 @@ class AppState {
 
   final String? generatedRoomImage;
   final List<Product> matchedProducts;
-  
+
+  final List<DesignHistory> history;
+
   final File? uploadedImage;
 
 
@@ -23,6 +26,7 @@ class AppState {
     this.selectedTheme,
     this.generatedRoomImage,
     this.matchedProducts = const [],
+    this.history = const [],
     this.uploadedImage,
   });
 
@@ -31,6 +35,7 @@ class AppState {
     DesignTheme? selectedTheme,
     File? uploadedImage,
     String? generatedRoomImage,
+    List<DesignHistory>? history,
     List<Product>? matchedProducts,
   }) {
     return AppState(
@@ -45,6 +50,9 @@ class AppState {
           
       matchedProducts:
           matchedProducts ?? this.matchedProducts,
+      
+      history:
+          history ?? this.history,
 
       uploadedImage: 
           uploadedImage ?? this.uploadedImage,
@@ -84,6 +92,28 @@ class AppStateNotifier
   void setUploadedImage(File image) {
     state = state.copyWith(
       uploadedImage: image,
+    );
+  }
+
+  void saveToHistory() {
+    if(
+      state.selectedRoomType == null ||
+      state.selectedTheme == null ||
+      state.generatedRoomImage == null
+    ){
+      return ;
+    }
+    final historyItem = DesignHistory(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      roomType: state.selectedRoomType!.title,
+      theme: state.selectedTheme!.title,
+      imagePath: state.generatedRoomImage!,
+      products: state.matchedProducts,
+      createdAt: DateTime.now(),
+    );
+
+    state = state.copyWith(
+      history: [historyItem, ...state.history],
     );
   }
 

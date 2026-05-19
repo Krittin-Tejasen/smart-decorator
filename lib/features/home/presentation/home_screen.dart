@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/hardware_service.dart';
@@ -8,6 +9,7 @@ import '../../../core/services/hardware_service.dart';
 import '../../../shared/providers/app_state_provider.dart';
 import '../../../shared/models/design_theme.dart';
 import '../../../shared/models/room_type.dart';
+
 
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
@@ -475,18 +477,26 @@ class HomeScreen extends ConsumerWidget {
 
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: 0,
+        onTap: (index) {
+          if (index == 1) {
+            context.go('/history');
+          }
+        },
 
-        selectedItemColor: AppColors.primary,
+        selectedItemColor:AppColors.primary,
 
         items: const [
-
           BottomNavigationBarItem(
-            icon: Icon(Icons.home_rounded),
+            icon: Icon(
+              Icons.home_rounded,
+            ),
             label: 'Home',
           ),
 
           BottomNavigationBarItem(
-            icon: Icon(Icons.history_rounded),
+            icon: Icon(
+              Icons.history_rounded,
+            ),
             label: 'History',
           ),
         ],

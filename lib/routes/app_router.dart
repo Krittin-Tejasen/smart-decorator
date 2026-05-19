@@ -5,6 +5,7 @@ import '../features/home/presentation/home_screen.dart';
 import '../features/splash/presentation/splash_screen.dart';
 import '../features/processing/presentation/processing_screen.dart';
 import '../features/results/presentation/results_screen.dart';
+import '../features/history/presentation/history_screen.dart';
 
 
 final GoRouter appRouter = GoRouter(
@@ -25,6 +26,10 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/results',
       builder: (BuildContext context, GoRouterState state) => const ResultsScreen(),
+    ),
+    GoRoute(
+      path: '/history',
+      builder: (context, state) => const HistoryScreen(),
     ),
   ],
 );
