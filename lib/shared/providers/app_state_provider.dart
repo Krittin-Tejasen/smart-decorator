@@ -6,6 +6,10 @@ import '../models/design_theme.dart';
 import '../models/room_type.dart';
 import '../models/product.dart';
 import '../models/design_history.dart';
+import '../models/generate_room_request.dart';
+
+import '../../core/services/ai_generation_service.dart';
+
 
 class AppState {
 
@@ -114,6 +118,31 @@ class AppStateNotifier
 
     state = state.copyWith(
       history: [historyItem, ...state.history],
+    );
+  }
+
+  Future<void> generateRoomDesign() async {
+    if (
+      state.selectedRoomType == null ||
+      state.selectedTheme == null ||
+      state.uploadedImage == null
+    ){
+      return;
+    }
+
+    final request = GenerateRoomRequest(
+      roomType: state.selectedRoomType!.id,
+      theme: state.selectedTheme!.id,
+      imagePath: state.uploadedImage!.path,
+    );
+
+    final aiService = AIGenerationService();
+
+    final response = await aiService.generateRoom(request);
+
+    state = state.copyWith(
+      generatedRoomImage: response.generatedImage,
+      matchedProducts: response.products,
     );
   }
 

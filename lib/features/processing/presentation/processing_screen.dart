@@ -34,7 +34,8 @@ class _ProcessingScreenState
 
         ref
             .read(appStateProvider.notifier)
-            .setFakeResults();
+            //.setFakeResults();
+            .generateRoomDesign();
         
         ref
             .read(appStateProvider.notifier)
