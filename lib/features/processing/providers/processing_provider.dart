@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/processing_step.dart';
