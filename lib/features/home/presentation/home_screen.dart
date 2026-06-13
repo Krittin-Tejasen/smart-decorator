@@ -374,6 +374,9 @@ class HomeScreen extends ConsumerWidget {
                         } else {
                           debugPrint('No LiDAR detected - Consider AR Vision Scan');
                         }
+                        if (context.mounted) {
+                          context.push('/scan_room');
+                        }
                       });
                     },
 

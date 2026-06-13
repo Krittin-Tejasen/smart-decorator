@@ -1,23 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class ARVisionView extends StatelessWidget {
   const ARVisionView({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const Padding(
-          padding: EdgeInsets.all(16.0),
-          child: Text('เล็งกล้องไปที่มุมห้องบนพื้น แล้วกดปุ่มเพื่อวัดระยะ'),
-        ),
-        Expanded(
-          child: Container(
-            color: Colors.grey[300], 
-            child: const Center(child: Text('AR Camera View (รอใส่ ar_flutter_plugin)')),
-          ), 
-        ),
-      ],
+    return const Scaffold(
+      // UiKitView จะทำการดึง View จากฝั่ง iOS มาเรนเดอร์ในพื้นที่นี้
+      body: UiKitView(
+        viewType: 'ar_camera_view', // ชื่อนี้ต้องตรงกับที่ตั้งไว้ใน Xcode
+        creationParamsCodec: StandardMessageCodec(),
+      ),
     );
   }
 }
