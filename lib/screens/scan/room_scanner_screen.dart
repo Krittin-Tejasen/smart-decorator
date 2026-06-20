@@ -1,5 +1,5 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
-import '../../core/services/hardware_service.dart';
 import '../views/lidar_view.dart';
 import '../views/ar_vision_view.dart';
 import '../views/manual_builder.dart';
@@ -12,32 +12,16 @@ class RoomScannerScreen extends StatefulWidget {
 }
 
 class _RoomScannerScreenState extends State<RoomScannerScreen> {
-  String _scanMode = 'loading'; // สถานะเริ่มต้น
+  late String _scanMode;
 
   @override
   void initState() {
     super.initState();
-    _determineScanMode();
-  }
-
-  Future<void> _determineScanMode() async {
-    bool hasLidar = await HardwareService.hasLidarSensor();
-    
-    setState(() {
-      if (hasLidar) {
-        _scanMode = 'lidar';
-      } else {
-        _scanMode = 'ar_vision'; 
-      }
-    });
+    _scanMode = Platform.isIOS ? 'lidar' : 'ar_vision';
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_scanMode == 'loading') {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Scan Room'),

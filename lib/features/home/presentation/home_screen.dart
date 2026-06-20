@@ -1,18 +1,13 @@
+import 'dart:io' show File, Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/constants/app_colors.dart';
-import '../../../core/services/hardware_service.dart';
-
 import '../../../shared/providers/app_state_provider.dart';
 import '../../../shared/models/design_theme.dart';
 import '../../../shared/models/room_type.dart';
-
-
-import 'dart:io';
-import 'package:image_picker/image_picker.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -366,18 +361,32 @@ class HomeScreen extends ConsumerWidget {
                   child: InkWell(
                     borderRadius: BorderRadius.circular(20),
 
-                    onTap: () {
-                      debugPrint('LiDAR Scan Tapped');
-                      HardwareService.hasLidarSensor().then((hasLidar) {
-                        if (hasLidar) {
-                          debugPrint('Device has LiDAR - Proceed to LiDAR Scan');
-                        } else {
-                          debugPrint('No LiDAR detected - Consider AR Vision Scan');
-                        }
-                        if (context.mounted) {
-                          context.push('/scan_room');
-                        }
-                      });
+                    onTap: () async {
+                      if (Platform.isAndroid) {
+                        final proceed = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Note: Lower Accuracy'),
+                            content: const Text(
+                              'Android devices do not have a LiDAR sensor.\n\n'
+                              'Room scan accuracy will be lower than on an iPhone with LiDAR. '
+                              'Tap each room corner as precisely as possible for the best results.',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Cancel'),
+                              ),
+                              ElevatedButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                child: const Text('Got it, continue'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (proceed != true || !context.mounted) return;
+                      }
+                      if (context.mounted) context.push('/scan_room');
                     },
 
                     child: Container(
