@@ -11,10 +11,14 @@ Future<void> main() async {
 
   WidgetsFlutterBinding.ensureInitialized();
 
+  // print("STEP 1");
+
   await dotenv.load(
-    fileName: ".env",
+    fileName: "assets/.env",
     
   );
+
+  // print("STEP 2");
 
   await Supabase.initialize(
     url: dotenv.env['SUPABASE_URL']!,
@@ -22,6 +26,8 @@ Future<void> main() async {
     anonKey:
         dotenv.env['SUPABASE_ANON_KEY']!,
   );
+
+  // print("STEP 3");
 
   runApp(
     const ProviderScope(

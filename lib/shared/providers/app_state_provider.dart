@@ -99,6 +99,16 @@ class AppStateNotifier
     );
   }
 
+  void clearUploadedImage() {
+    state = AppState(
+      selectedRoomType: state.selectedRoomType,
+      selectedTheme: state.selectedTheme,
+      generatedRoomImage: state.generatedRoomImage,
+      matchedProducts: state.matchedProducts,
+      history: state.history,
+    );
+  }
+
   void saveToHistory() {
     if(
       state.selectedRoomType == null ||

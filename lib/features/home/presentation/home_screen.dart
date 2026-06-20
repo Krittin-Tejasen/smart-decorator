@@ -346,12 +346,35 @@ class HomeScreen extends ConsumerWidget {
                   const SizedBox(height: 20),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(20),
-
-                    child: Image.file(
-                      appState.uploadedImage!,
-                      height: 220,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
+                    child: Stack(
+                      children: [
+                        Image.file(
+                          appState.uploadedImage!,
+                          height: 220,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                        ),
+                        Positioned(
+                          top: 12,
+                          right: 12,
+                          child: Material(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            shape: const CircleBorder(),
+                            child: IconButton(
+                              tooltip: 'Remove photo',
+                              icon: const Icon(
+                                Icons.close_rounded,
+                                color: Colors.white,
+                              ),
+                              onPressed: () {
+                                ref
+                                    .read(appStateProvider.notifier)
+                                    .clearUploadedImage();
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
