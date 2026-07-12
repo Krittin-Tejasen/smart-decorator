@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from PIL import Image
+from PIL import Image, ImageDraw
 
 load_dotenv(Path(__file__).with_name(".env"))
 
@@ -215,6 +215,29 @@ async def generate_with_replicate(prompt: str, image_bytes: bytes, mime_type: st
     raise HTTPException(status_code=504, detail="Replicate generation timed out.")
 
 
+async def generate_with_mock(room_type: str, theme: str, source_image: Image.Image) -> str:
+    """Echo the uploaded photo with a watermark instead of calling a paid AI provider.
+
+    Lets the rest of the pipeline (upload, processing, results, history) be built and
+    tested without Gemini/Replicate credentials configured.
+    """
+    await asyncio.sleep(1)
+
+    preview = source_image.convert("RGB")
+    draw = ImageDraw.Draw(preview, "RGBA")
+    banner_height = max(40, preview.height // 12)
+    draw.rectangle([(0, 0), (preview.width, banner_height)], fill=(0, 0, 0, 160))
+    draw.text(
+        (16, banner_height // 4),
+        f"MOCK PREVIEW - {theme} {room_type} (no AI call made)",
+        fill=(255, 255, 255, 255),
+    )
+
+    buffer = BytesIO()
+    preview.save(buffer, format="PNG")
+    return build_data_url(buffer.getvalue(), "image/png")
+
+
 def mock_products() -> list[dict[str, Any]]:
     return [
         {
@@ -257,7 +280,9 @@ async def generate_room(
     prompt = build_room_prompt(room_type, theme)
     provider = os.getenv("AI_IMAGE_PROVIDER", "gemini").lower()
 
-    if provider == "replicate":
+    if provider == "mock":
+        generated_image = await generate_with_mock(room_type, theme, source_image)
+    elif provider == "replicate":
         generated_image = await generate_with_replicate(prompt, image_bytes, mime_type)
     elif provider == "gemini":
         generated_image = await generate_with_gemini(prompt, image_bytes, mime_type)
