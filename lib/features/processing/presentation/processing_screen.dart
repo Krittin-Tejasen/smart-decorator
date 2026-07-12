@@ -28,14 +28,19 @@ class _ProcessingScreenState
 
     Future.microtask(() async {
       try {
-        await ref
-            .read(processingProvider.notifier)
-            .startProcessing();
+        // Run the fake step choreography and the real backend request at the
+        // same time, so the progress UI keeps reflecting "still working" for
+        // however long the actual generation takes instead of sitting at
+        // 100% while the network call is still in flight.
+        await Future.wait([
+          ref.read(processingProvider.notifier).startProcessing(),
+          ref.read(appStateProvider.notifier).generateRoomDesign(),
+        ]);
 
-        await ref
-            .read(appStateProvider.notifier)
-            .generateRoomDesign();
-          
+        ref
+            .read(processingProvider.notifier)
+            .completeProcessing();
+
         ref
             .read(appStateProvider.notifier)
             .saveToHistory();
