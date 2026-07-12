@@ -19,7 +19,7 @@ BASE_URL = "http://localhost:8000"
 CROPS_DIR = Path("crops")
 
 
-def test_image(image_path: str, bbox_padding: float | None = None) -> None:
+def test_image(image_path: str, bbox_padding: float | None = None, remove_bg: bool = False) -> None:
     path = Path(image_path)
     print(f"\n{'='*60}")
     print(f"Image: {path.name}")
@@ -30,9 +30,11 @@ def test_image(image_path: str, bbox_padding: float | None = None) -> None:
 
     mime = "image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
 
-    data = {}
+    data: dict = {}
     if bbox_padding is not None:
         data["bbox_padding"] = str(bbox_padding)
+    if remove_bg:
+        data["remove_bg"] = "true"
 
     response = httpx.post(
         f"{BASE_URL}/segment-furniture",
@@ -86,10 +88,14 @@ if __name__ == "__main__":
         "--padding", type=float, default=None,
         help="Bbox padding fraction per side (e.g. 0.05). Overrides BBOX_PADDING in .env."
     )
+    parser.add_argument(
+        "--remove-bg", action="store_true", default=False,
+        help="Remove background from each crop using rembg u2net model."
+    )
     args = parser.parse_args()
 
     for img in args.images:
         if not os.path.exists(img):
             print(f"File not found: {img}")
             continue
-        test_image(img, bbox_padding=args.padding)
+        test_image(img, bbox_padding=args.padding, remove_bg=args.remove_bg)

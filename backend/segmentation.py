@@ -32,6 +32,16 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image
 from pydantic import BaseModel
+from rembg import new_session, remove as rembg_remove
+
+# Loaded once on first use — avoids re-downloading the model every request
+_rembg_session = None
+
+def _get_rembg_session():
+    global _rembg_session
+    if _rembg_session is None:
+        _rembg_session = new_session("u2net")
+    return _rembg_session
 
 router = APIRouter(tags=["segmentation"])
 
@@ -111,6 +121,7 @@ def _build_item(
     x_max: float,
     y_max: float,
     bbox_padding: float = 0.0,
+    remove_bg: bool = False,
 ) -> FurnitureItem:
     W, H = img.size
 
@@ -122,6 +133,10 @@ def _build_item(
 
     px = (int(x_min_pad * W), int(y_min_pad * H), int(x_max_pad * W), int(y_max_pad * H))
     crop = img.crop(px)
+
+    if remove_bg:
+        crop = rembg_remove(crop, session=_get_rembg_session())
+
     w_px = max(px[2] - px[0], 1)
     h_px = max(px[3] - px[1], 1)
     return FurnitureItem(
@@ -322,6 +337,7 @@ async def run_segmentation(
     image_bytes: bytes,
     mime_type: str,
     bbox_padding: float | None = None,
+    remove_bg: bool = False,
 ) -> SegmentationResult:
     """
     Public helper — also called from main.py's /generate-room when segment=true.
@@ -370,7 +386,7 @@ async def run_segmentation(
             continue
 
         items.append(
-            _build_item(img, det["label"], det["confidence"], idx, x1, y1, x2, y2, bbox_padding)
+            _build_item(img, det["label"], det["confidence"], idx, x1, y1, x2, y2, bbox_padding, remove_bg)
         )
 
     counts = dict(Counter(item.label for item in items))
@@ -383,6 +399,7 @@ async def run_segmentation(
 async def segment_furniture(
     image: UploadFile = File(...),
     bbox_padding: float = Form(default=None, description="Expand each bbox by this fraction (0–0.2). Overrides BBOX_PADDING env var."),
+    remove_bg: bool = Form(default=False, description="Remove background from each crop (returns transparent PNG)."),
 ):
     """
     Segment furniture items from an interior design image.
@@ -405,4 +422,4 @@ async def segment_furniture(
     except Exception as exc:
         raise HTTPException(400, "Uploaded file is not a valid image.") from exc
 
-    return await run_segmentation(raw_bytes, mime_type, bbox_padding=bbox_padding)
+    return await run_segmentation(raw_bytes, mime_type, bbox_padding=bbox_padding, remove_bg=remove_bg)
