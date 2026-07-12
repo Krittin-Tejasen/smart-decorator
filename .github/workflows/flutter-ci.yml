@@ -1,0 +1,38 @@
+name: Flutter CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+jobs:
+  analyze_and_test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.9'
+          channel: 'stable'
+          cache: true
+
+      # assets/.env holds real secrets and is gitignored, but pubspec.yaml
+      # bundles it as an asset, so flutter analyze/test need *some* file
+      # there. Use the checked-in placeholder instead of real credentials.
+      - name: Provide placeholder env asset
+        run: cp assets/.env.example assets/.env
+
+      - run: flutter pub get
+
+      - run: flutter analyze
+
+      - name: Run tests
+        run: |
+          if find test -name '*_test.dart' 2>/dev/null | grep -q .; then
+            flutter test
+          else
+            echo "No test files yet, skipping."
+          fi
