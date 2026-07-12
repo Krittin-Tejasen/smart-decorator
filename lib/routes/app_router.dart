@@ -8,6 +8,8 @@ import '../features/results/presentation/results_screen.dart';
 import '../features/test/presentation/test_screen.dart';
 import '../features/history/presentation/history_screen.dart';
 
+import '../screens/scan/room_scanner_screen.dart';
+
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
@@ -36,6 +38,10 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/test',
       builder: (BuildContext context, GoRouterState state) => const TestScreen(),
+    ),
+    GoRoute(
+      path: '/scan_room',
+      builder: (context, state) => const RoomScannerScreen(),
     ),
   ],
 );
