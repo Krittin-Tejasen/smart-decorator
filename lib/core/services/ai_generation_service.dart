@@ -1,45 +1,49 @@
+import 'package:dio/dio.dart';
+
 import '../../shared/models/generate_room_request.dart';
 import '../../shared/models/generate_room_response.dart';
-import '../../shared/models/product.dart';
+import 'api_service.dart';
 
 class AIGenerationService {
+  final Dio _dio;
+
+  AIGenerationService({
+    Dio? dio,
+  }) : _dio = dio ?? ApiService().dio;
 
   Future<GenerateRoomResponse> generateRoom(
     GenerateRoomRequest request,
   ) async {
+    final formData = FormData.fromMap({
+      'room_type': request.roomType,
+      'theme': request.theme,
+      'image': await MultipartFile.fromFile(
+        request.imagePath,
+        filename: request.imagePath.split(RegExp(r'[\\/]')).last,
+      ),
+    });
 
-    await Future.delayed(
-      const Duration(seconds: 2),
-    );
+    final Response<Map<String, dynamic>> response;
 
-    return GenerateRoomResponse(
+    try {
+      response = await _dio.post<Map<String, dynamic>>(
+        '/generate-room',
+        data: formData,
+      );
+    } on DioException catch (error) {
+      final data = error.response?.data;
+      final detail = data is Map<String, dynamic> ? data['detail'] : null;
 
-      generatedImage:
-          'fake_generated_room',
+      throw Exception(
+        detail?.toString() ?? error.message ?? 'Generate room request failed.',
+      );
+    }
 
-      products: [
+    final data = response.data;
+    if (data == null) {
+      throw Exception('Generate room API returned an empty response.');
+    }
 
-        Product(
-          id: '1',
-          name: 'Modern Sofa',
-          imageUrl: 'sofa',
-          price: 12990,
-        ),
-
-        Product(
-          id: '2',
-          name: 'Minimal Lamp',
-          imageUrl: 'lamp',
-          price: 2490,
-        ),
-
-        Product(
-          id: '3',
-          name: 'Wooden Table',
-          imageUrl: 'table',
-          price: 7990,
-        ),
-      ],
-    );
+    return GenerateRoomResponse.fromJson(data);
   }
 }

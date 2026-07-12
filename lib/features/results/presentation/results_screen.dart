@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -44,25 +46,14 @@ class ResultsScreen
 
             children: [
 
-              Container(
-                height: 250,
-                width: double.infinity,
-
-                decoration: BoxDecoration(
-                  color:
-                      const Color(0xFFEFEAEA),
-
-                  borderRadius:
-                      BorderRadius.circular(
-                    30,
-                  ),
+              ClipRRect(
+                borderRadius:
+                    BorderRadius.circular(
+                  30,
                 ),
-
-                child: const Center(
-                  child: Icon(
-                    Icons.chair_rounded,
-                    size: 140,
-                  ),
+                child: _GeneratedRoomImage(
+                  imageData:
+                      appState.generatedRoomImage,
                 ),
               ),
 
@@ -111,6 +102,44 @@ class ResultsScreen
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GeneratedRoomImage extends StatelessWidget {
+  final String? imageData;
+
+  const _GeneratedRoomImage({
+    required this.imageData,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final data = imageData;
+
+    if (data != null && data.startsWith('data:image')) {
+      final base64Data = data.substring(data.indexOf(',') + 1);
+
+      return Image.memory(
+        base64Decode(base64Data),
+        height: 250,
+        width: double.infinity,
+        fit: BoxFit.cover,
+      );
+    }
+
+    return Container(
+      height: 250,
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: Color(0xFFEFEAEA),
+      ),
+      child: const Center(
+        child: Icon(
+          Icons.chair_rounded,
+          size: 140,
         ),
       ),
     );

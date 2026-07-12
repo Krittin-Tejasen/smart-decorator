@@ -67,7 +67,7 @@ class AppState {
     return 
           selectedRoomType != null 
           && selectedTheme != null 
-          // && uploadedImage != null
+          && uploadedImage != null
           ;
   }
 

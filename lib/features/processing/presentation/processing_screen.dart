@@ -27,22 +27,33 @@ class _ProcessingScreenState
     super.initState();
 
     Future.microtask(() async {
-      await 
-        ref
+      try {
+        await ref
             .read(processingProvider.notifier)
             .startProcessing();
 
-        ref
+        await ref
             .read(appStateProvider.notifier)
-            .setFakeResults();
-            // .generateRoomDesign();
-        
+            .generateRoomDesign();
+          
         ref
             .read(appStateProvider.notifier)
             .saveToHistory();
 
-      if (mounted) {
-        context.go('/results');
+        if (mounted) {
+          context.go('/results');
+        }
+      } catch (error) {
+        debugPrint('Generate room failed: $error');
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Generate failed: $error'),
+            ),
+          );
+          context.go('/home');
+        }
       }
     });
   }
