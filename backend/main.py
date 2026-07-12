@@ -9,10 +9,12 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageDraw
+from segmentation import router as segmentation_router, run_segmentation
 
 load_dotenv(Path(__file__).with_name(".env"))
 
 app = FastAPI()
+app.include_router(segmentation_router)
 
 
 def build_room_prompt(room_type: str, theme: str) -> str:
@@ -267,6 +269,7 @@ async def generate_room(
     room_type: str = Form(...),
     theme: str = Form(...),
     image: UploadFile = File(...),
+    segment: bool = Form(False),
 ):
     image_bytes = await image.read()
     mime_type = image.content_type or "image/png"
@@ -292,7 +295,15 @@ async def generate_room(
             detail=f"Unsupported AI_IMAGE_PROVIDER: {provider}",
         )
 
-    return {
+    response: dict[str, Any] = {
         "generated_image": generated_image,
         "products": mock_products(),
     }
+
+    if segment:
+        _, encoded = generated_image.split(",", 1)
+        gen_bytes = base64.b64decode(encoded)
+        seg_result = await run_segmentation(gen_bytes, "image/png")
+        response["furniture_segments"] = seg_result.model_dump()
+
+    return response
