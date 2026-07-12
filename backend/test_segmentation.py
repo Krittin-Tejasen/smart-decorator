@@ -6,6 +6,7 @@ Usage:
 Prints a summary of detected furniture and saves each item's crop to ./crops/
 """
 
+import argparse
 import base64
 import json
 import os
@@ -18,7 +19,7 @@ BASE_URL = "http://localhost:8000"
 CROPS_DIR = Path("crops")
 
 
-def test_image(image_path: str) -> None:
+def test_image(image_path: str, bbox_padding: float | None = None) -> None:
     path = Path(image_path)
     print(f"\n{'='*60}")
     print(f"Image: {path.name}")
@@ -29,9 +30,14 @@ def test_image(image_path: str) -> None:
 
     mime = "image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
 
+    data = {}
+    if bbox_padding is not None:
+        data["bbox_padding"] = str(bbox_padding)
+
     response = httpx.post(
         f"{BASE_URL}/segment-furniture",
         files={"image": (path.name, image_bytes, mime)},
+        data=data,
         timeout=120,
     )
 
@@ -74,12 +80,16 @@ def test_image(image_path: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python test_segmentation.py image1.jpg [image2.jpg ...]")
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("images", nargs="+", help="Image file(s) to segment")
+    parser.add_argument(
+        "--padding", type=float, default=None,
+        help="Bbox padding fraction per side (e.g. 0.05). Overrides BBOX_PADDING in .env."
+    )
+    args = parser.parse_args()
 
-    for img in sys.argv[1:]:
+    for img in args.images:
         if not os.path.exists(img):
             print(f"File not found: {img}")
             continue
-        test_image(img)
+        test_image(img, bbox_padding=args.padding)

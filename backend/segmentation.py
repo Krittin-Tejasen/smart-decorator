@@ -29,7 +29,7 @@ from io import BytesIO
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image
 from pydantic import BaseModel
 
@@ -110,9 +110,17 @@ def _build_item(
     y_min: float,
     x_max: float,
     y_max: float,
+    bbox_padding: float = 0.0,
 ) -> FurnitureItem:
     W, H = img.size
-    px = (int(x_min * W), int(y_min * H), int(x_max * W), int(y_max * H))
+
+    # Expand bbox by padding (fraction of image dimension) on each side
+    x_min_pad = max(0.0, x_min - bbox_padding)
+    y_min_pad = max(0.0, y_min - bbox_padding)
+    x_max_pad = min(1.0, x_max + bbox_padding)
+    y_max_pad = min(1.0, y_max + bbox_padding)
+
+    px = (int(x_min_pad * W), int(y_min_pad * H), int(x_max_pad * W), int(y_max_pad * H))
     crop = img.crop(px)
     w_px = max(px[2] - px[0], 1)
     h_px = max(px[3] - px[1], 1)
@@ -310,10 +318,21 @@ async def _detect_with_gemini(image_bytes: bytes, mime_type: str) -> list[dict]:
 
 # ── Orchestrator ────────────────────────────────────────────────────────────
 
-async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationResult:
+async def run_segmentation(
+    image_bytes: bytes,
+    mime_type: str,
+    bbox_padding: float | None = None,
+) -> SegmentationResult:
     """
     Public helper — also called from main.py's /generate-room when segment=true.
+
+    bbox_padding: expand each detected box by this fraction of image size on
+    every side before cropping (e.g. 0.05 = 5%).  Defaults to BBOX_PADDING
+    env var, then 0.02.
     """
+    if bbox_padding is None:
+        bbox_padding = float(os.getenv("BBOX_PADDING", "0.02"))
+
     img = Image.open(BytesIO(image_bytes)).convert("RGB")
     W, H = img.size
 
@@ -350,7 +369,9 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
         if x2 - x1 < 0.01 or y2 - y1 < 0.01:
             continue
 
-        items.append(_build_item(img, det["label"], det["confidence"], idx, x1, y1, x2, y2))
+        items.append(
+            _build_item(img, det["label"], det["confidence"], idx, x1, y1, x2, y2, bbox_padding)
+        )
 
     counts = dict(Counter(item.label for item in items))
     return SegmentationResult(items=items, counts=counts, total=len(items), method=method)
@@ -359,7 +380,10 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
 # ── Route ───────────────────────────────────────────────────────────────────
 
 @router.post("/segment-furniture", response_model=SegmentationResult)
-async def segment_furniture(image: UploadFile = File(...)):
+async def segment_furniture(
+    image: UploadFile = File(...),
+    bbox_padding: float = Form(default=None, description="Expand each bbox by this fraction (0–0.2). Overrides BBOX_PADDING env var."),
+):
     """
     Segment furniture items from an interior design image.
 
@@ -381,4 +405,4 @@ async def segment_furniture(image: UploadFile = File(...)):
     except Exception as exc:
         raise HTTPException(400, "Uploaded file is not a valid image.") from exc
 
-    return await run_segmentation(raw_bytes, mime_type)
+    return await run_segmentation(raw_bytes, mime_type, bbox_padding=bbox_padding)
