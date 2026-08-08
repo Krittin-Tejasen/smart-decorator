@@ -13,3 +13,8 @@ python-dotenv
 httpx
 
 pydantic
+pydantic-settings
+
+# Product matching (embedding + vector search)
+pinecone
+sentence-transformers

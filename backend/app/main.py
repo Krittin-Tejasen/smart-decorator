@@ -1,16 +1,13 @@
 import asyncio
 import base64
-import os
 from io import BytesIO
-from pathlib import Path
 from typing import Any
 
 import httpx
-from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from PIL import Image
 
-load_dotenv(Path(__file__).with_name(".env"))
+from app.core.config import settings
 
 app = FastAPI()
 
@@ -69,8 +66,8 @@ async def fetch_output_as_data_url(client: httpx.AsyncClient, output_url: str, t
 
 
 async def generate_with_gemini(prompt: str, image_bytes: bytes, mime_type: str) -> str:
-    api_key = os.getenv("GEMINI_API_KEY")
-    model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+    api_key = settings.gemini_api_key
+    model = settings.gemini_image_model
 
     if not api_key:
         raise HTTPException(
@@ -129,12 +126,12 @@ async def generate_with_gemini(prompt: str, image_bytes: bytes, mime_type: str) 
 
 
 async def generate_with_replicate(prompt: str, image_bytes: bytes, mime_type: str) -> str:
-    token = os.getenv("REPLICATE_API_TOKEN")
-    model = os.getenv("REPLICATE_MODEL", "google/nano-banana-2")
-    image_input_field = os.getenv("REPLICATE_IMAGE_INPUT_FIELD", "image_input")
-    image_input_is_array = os.getenv("REPLICATE_IMAGE_INPUT_IS_ARRAY", "true").lower() == "true"
-    aspect_ratio = os.getenv("REPLICATE_ASPECT_RATIO", "match_input_image")
-    output_format = os.getenv("REPLICATE_OUTPUT_FORMAT", "png")
+    token = settings.replicate_api_token
+    model = settings.replicate_model
+    image_input_field = settings.replicate_image_input_field
+    image_input_is_array = settings.replicate_image_input_is_array
+    aspect_ratio = settings.replicate_aspect_ratio
+    output_format = settings.replicate_output_format
 
     if not token:
         raise HTTPException(
@@ -255,7 +252,7 @@ async def generate_room(
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.") from exc
 
     prompt = build_room_prompt(room_type, theme)
-    provider = os.getenv("AI_IMAGE_PROVIDER", "gemini").lower()
+    provider = settings.ai_image_provider.lower()
 
     if provider == "replicate":
         generated_image = await generate_with_replicate(prompt, image_bytes, mime_type)
