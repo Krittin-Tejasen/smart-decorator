@@ -58,6 +58,8 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
             case "clearPoints":
                 self.clearAll()
                 result(nil)
+            case "captureSnapshot":
+                self.handleCaptureSnapshot(result: result)
             default:
                 result(FlutterMethodNotImplemented)
             }
@@ -116,6 +118,19 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
 
         let allPoints = points.map { ["x": Double($0.x), "y": Double($0.y), "z": Double($0.z)] }
         result(["points": points.count, "distance": Double(distance), "allPoints": allPoints])
+    }
+
+    private func handleCaptureSnapshot(result: FlutterResult) {
+        guard let frame = arView.session.currentFrame else {
+            result(FlutterError(code: "NO_FRAME", message: "AR session has no current frame", details: nil))
+            return
+        }
+        do {
+            let state = RoomCaptureState(frame: frame)
+            result(try state.toFlutterMap())
+        } catch {
+            result(FlutterError(code: "SERIALISE_FAILED", message: error.localizedDescription, details: nil))
+        }
     }
 
     private func makeLine(from start: simd_float3, to end: simd_float3) -> SCNNode {

@@ -72,5 +72,7 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>แอปพลิเคชันต้องการใช้กล้องเพื่อสแกนขนาดห้องด้วย AR</string>
+	<key>NSWorldSensingUsageDescription</key>
+	<string>แอปพลิเคชันใช้ LiDAR เพื่อวัดขนาดห้องและเฟอร์นิเจอร์ในพื้นที่จริง</string>
 </dict>
 </plist>
