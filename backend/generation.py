@@ -135,7 +135,12 @@ async def generate_with_gemini(prompt: str, image_bytes: bytes, mime_type: str) 
         for part in parts:
             inline_data = part.get("inlineData") or part.get("inline_data")
             if inline_data and inline_data.get("data"):
-                return f"data:image/png;base64,{inline_data['data']}"
+                returned_mime_type = (
+                    inline_data.get("mimeType")
+                    or inline_data.get("mime_type")
+                    or "image/png"
+                )
+                return f"data:{returned_mime_type};base64,{inline_data['data']}"
 
     print(response_data)
     raise HTTPException(status_code=502, detail="Gemini did not return an image.")
