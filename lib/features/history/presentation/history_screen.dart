@@ -24,7 +24,7 @@ class HistoryScreen extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: AppColors.background,
         title: const Text(
-          'Your designs',
+          'History',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
@@ -80,21 +80,6 @@ class _HistoryCard extends StatelessWidget {
     return AppColors.sageDeep;
   }
 
-  String get _relativeDate {
-    final diff = DateTime.now().difference(item.createdAt);
-    if (diff.inDays >= 7) {
-      final weeks = (diff.inDays / 7).floor();
-      return weeks == 1 ? '1 week ago' : '$weeks weeks ago';
-    }
-    if (diff.inDays >= 1) {
-      return diff.inDays == 1 ? '1 day ago' : '${diff.inDays} days ago';
-    }
-    if (diff.inHours >= 1) {
-      return diff.inHours == 1 ? '1 hour ago' : '${diff.inHours} hours ago';
-    }
-    return 'Just now';
-  }
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -147,12 +132,12 @@ class _HistoryCard extends StatelessWidget {
                   runSpacing: 6,
                   children: [
                     _Chip(
-                      label: item.theme,
+                      label: 'Theme: ${item.theme}',
                       bg: _tileColor,
                       fg: _tileIconColor,
                     ),
                     _Chip(
-                      label: '${item.products.length} product${item.products.length == 1 ? '' : 's'}',
+                      label: '${item.products.length} Products Matched',
                       bg: AppColors.brassTint,
                       fg: AppColors.brassDeep,
                     ),
@@ -162,7 +147,7 @@ class _HistoryCard extends StatelessWidget {
                 const SizedBox(height: 6),
 
                 Text(
-                  _relativeDate,
+                  item.createdAt.toString(),
                   style: const TextStyle(fontSize: 11, color: AppColors.muted),
                 ),
               ],
@@ -222,17 +207,12 @@ class _EmptyHistory extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           const Text(
-            'No designs yet',
+            'No Design History Yet',
             style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.bold,
               color: AppColors.ink,
             ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Generate a room to see it here',
-            style: TextStyle(fontSize: 12.5, color: AppColors.muted),
           ),
         ],
       ),

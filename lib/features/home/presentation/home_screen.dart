@@ -95,32 +95,23 @@ class HomeScreen extends ConsumerWidget {
 
                 const SizedBox(height: 16),
 
-                ///////////////  Eyebrow
-                Row(
-                  children: [
-                    const Icon(Icons.home_rounded, size: 16, color: AppColors.sage),
-                    const SizedBox(width: 6),
-                    Text(
-                      'SMART DECORATOR',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1.1,
-                        color: AppColors.sage,
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 6),
-
                 ///////////////  App Title
-                const Text(
-                  'Scan, visualise,\nshop your room',
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: 'Smart ',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      TextSpan(
+                        text: 'Decorator',
+                        style: TextStyle(fontWeight: FontWeight.normal),
+                      ),
+                    ],
+                  ),
                   style: TextStyle(
-                    fontSize: 28,
-                    height: 1.25,
-                    fontWeight: FontWeight.bold,
+                    fontSize: 34,
+                    height: 1.2,
                     color: AppColors.ink,
                   ),
                 ),
@@ -129,7 +120,7 @@ class HomeScreen extends ConsumerWidget {
 
                 ///////////////  App Subtitle
                 const Text(
-                  'Real dimensions in, a finished room out.',
+                  'Scan to Visualize & Shop Your Dream Room',
                   style: TextStyle(
                     fontSize: 14,
                     color: AppColors.muted,
@@ -140,7 +131,7 @@ class HomeScreen extends ConsumerWidget {
                 const SizedBox(height: 28),
 
                 ///////////////  Room Type Options
-                const _SectionLabel('Room type'),
+                const _SectionLabel('Choose a Room Type'),
 
                 const SizedBox(height: 12),
 
@@ -223,7 +214,7 @@ class HomeScreen extends ConsumerWidget {
                 const SizedBox(height: 26),
 
                 ///////////////  Theme Color Options
-                const _SectionLabel('Theme'),
+                const _SectionLabel('Choose Theme'),
 
                 const SizedBox(height: 12),
 
@@ -284,7 +275,7 @@ class HomeScreen extends ConsumerWidget {
                 const SizedBox(height: 26),
 
                 ///////////////  Upload Room Photo Section
-                const _SectionLabel('Current room photo'),
+                const _SectionLabel('Upload Current Room Photo'),
 
                 const SizedBox(height: 12),
 
@@ -330,7 +321,7 @@ class HomeScreen extends ConsumerWidget {
                           ),
                           const SizedBox(width: 12),
                           const Text(
-                            'Upload photo',
+                            'Upload Photo',
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
@@ -414,64 +405,42 @@ class HomeScreen extends ConsumerWidget {
                       if (context.mounted) context.push('/scan_room');
                     },
 
-                    child: Stack(
-                      children: [
-                        Positioned(
-                          right: -18,
-                          top: -18,
-                          child: Container(
-                            width: 90,
-                            height: 90,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.white.withValues(alpha: 0.06),
+                    child: Padding(
+                      padding: const EdgeInsets.all(18),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Scan Room\nwith LiDAR',
+                                  style: TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+
+                                const SizedBox(height: 6),
+
+                                Text(
+                                  'Precise 3D Room Scan with suitable iOS device',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.white.withValues(alpha: 0.75),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ),
 
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(18, 18, 18, 4),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          const SizedBox(width: 12),
 
-                            children: [
-                              Row(
-                                children: [
-                                  const ScanBracketIcon(size: 18, color: AppColors.brass),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    'Scan room with LiDAR',
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ],
-                              ),
-
-                              const SizedBox(height: 4),
-
-                              Text(
-                                'Tap corners, get exact room size',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.white.withValues(alpha: 0.75),
-                                ),
-                              ),
-
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: LidarHandIllustration(
-                                  width: 200,
-                                  height: 78,
-                                  bracketColor: AppColors.brass,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                          LidarScanGraphic(size: 64, bracketColor: AppColors.brass),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -505,7 +474,7 @@ class HomeScreen extends ConsumerWidget {
                       : null,
 
                     child: const Text(
-                      'Generate design',
+                      'Generate Design',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
@@ -519,7 +488,7 @@ class HomeScreen extends ConsumerWidget {
 
                   const Center(
                     child: Text(
-                      'Select a room type, theme, and photo to continue',
+                      'Please select room type, theme, and uplaod your room image',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 12,

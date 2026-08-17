@@ -33,7 +33,7 @@ class ResultsScreen
       appBar: AppBar(
         backgroundColor: AppColors.background,
         title: const Text(
-          'Your new room',
+          'Decorated Room',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
@@ -76,7 +76,7 @@ class ResultsScreen
                     const Icon(Icons.sell_rounded, size: 15, color: AppColors.brassDeep),
                     const SizedBox(width: 6),
                     Text(
-                      '${products.length} matching product${products.length == 1 ? '' : 's'} found',
+                      '${products.length} Matching Product Found',
                       style: const TextStyle(
                         color: AppColors.brassDeep,
                         fontSize: 12.5,

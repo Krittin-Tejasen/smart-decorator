@@ -24,7 +24,8 @@ class _SparklePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = color
-      ..style = PaintingStyle.fill;
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
 
     final w = size.width;
     final h = size.height;
@@ -79,7 +80,8 @@ class _ScanBracketPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
 
     final w = size.width;
     final h = size.height;
@@ -121,127 +123,47 @@ class _ScanBracketPainter extends CustomPainter {
       oldDelegate.color != color || oldDelegate.strokeWidth != strokeWidth;
 }
 
-/// A hand holding a phone, reaching up from the bottom of its box - the LiDAR
-/// scan hero illustration on the home screen.
-class LidarHandIllustration extends StatelessWidget {
-  final double width;
-  final double height;
-  final Color handColor;
-  final Color phoneCaseColor;
-  final Color phoneScreenColor;
+/// A simple phone-with-viewfinder graphic for the LiDAR scan card. Deliberately
+/// plain (rect + rounded corners + the ScanBracketIcon above) rather than an
+/// illustrated scene - compound hand-drawn shapes are the ones that render
+/// unreliably across devices; flat geometric shapes hold up.
+class LidarScanGraphic extends StatelessWidget {
+  final double size;
+  final Color caseColor;
+  final Color screenColor;
   final Color bracketColor;
 
-  const LidarHandIllustration({
+  const LidarScanGraphic({
     super.key,
-    this.width = 260,
-    this.height = 100,
-    this.handColor = const Color(0xFFE7C9A0),
-    this.phoneCaseColor = const Color(0xFF17140F),
-    this.phoneScreenColor = const Color(0xFFEEF3F1),
+    this.size = 64,
+    this.caseColor = const Color(0xFF17140F),
+    this.screenColor = const Color(0xFFEEF3F1),
     required this.bracketColor,
   });
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: width,
-      height: height,
-      child: CustomPaint(
-        size: Size(width, height),
-        painter: _LidarHandPainter(
-          handColor: handColor,
-          phoneCaseColor: phoneCaseColor,
-          phoneScreenColor: phoneScreenColor,
-          bracketColor: bracketColor,
+    final screenInset = size * 0.09;
+    return Container(
+      width: size * 0.62,
+      height: size,
+      padding: EdgeInsets.all(screenInset),
+      decoration: BoxDecoration(
+        color: caseColor,
+        borderRadius: BorderRadius.circular(size * 0.16),
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          color: screenColor,
+          borderRadius: BorderRadius.circular(size * 0.05),
+        ),
+        padding: EdgeInsets.all(size * 0.1),
+        child: ScanBracketIcon(
+          size: size * 0.6,
+          color: bracketColor,
+          strokeWidth: 1.6,
         ),
       ),
     );
   }
-}
-
-class _LidarHandPainter extends CustomPainter {
-  final Color handColor;
-  final Color phoneCaseColor;
-  final Color phoneScreenColor;
-  final Color bracketColor;
-
-  _LidarHandPainter({
-    required this.handColor,
-    required this.phoneCaseColor,
-    required this.phoneScreenColor,
-    required this.bracketColor,
-  });
-
-  // Reference art was drawn against a 260x92 canvas - scale everything from there.
-  static const _refW = 260.0;
-  static const _refH = 92.0;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final sx = size.width / _refW;
-    final sy = size.height / _refH;
-    canvas.save();
-    canvas.scale(sx, sy);
-
-    final armPaint = Paint()
-      ..color = handColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 15
-      ..strokeCap = StrokeCap.round;
-
-    final arm = Path()
-      ..moveTo(100, 92)
-      ..cubicTo(100, 66, 108, 52, 126, 52)
-      ..cubicTo(144, 52, 132, 64, 156, 64)
-      ..cubicTo(166, 64, 166, 56, 180, 56)
-      ..cubicTo(194, 56, 200, 66, 200, 80);
-    canvas.drawPath(arm, armPaint);
-
-    final caseRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(150, 8, 30, 52),
-      const Radius.circular(7),
-    );
-    canvas.drawRRect(caseRect, Paint()..color = phoneCaseColor);
-
-    final screenRect = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(153, 13, 24, 38),
-      const Radius.circular(2),
-    );
-    canvas.drawRRect(screenRect, Paint()..color = phoneScreenColor);
-
-    canvas.save();
-    canvas.translate(158, 19);
-    final bracketPaint = Paint()
-      ..color = bracketColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.6
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    const armLen = 5.0;
-    const box = 17.0;
-    void bracket(Offset c, Offset h, Offset v) {
-      canvas.drawPath(
-        Path()
-          ..moveTo(h.dx, h.dy)
-          ..lineTo(c.dx, c.dy)
-          ..lineTo(v.dx, v.dy),
-        bracketPaint,
-      );
-    }
-
-    bracket(const Offset(0, 0), const Offset(armLen, 0), const Offset(0, armLen));
-    bracket(const Offset(box, 0), Offset(box - armLen, 0), Offset(box, armLen));
-    bracket(Offset(box, box), Offset(box - armLen, box), Offset(box, box - armLen));
-    bracket(Offset(0, box), Offset(armLen, box), Offset(0, box - armLen));
-    canvas.restore();
-
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant _LidarHandPainter oldDelegate) =>
-      oldDelegate.handColor != handColor ||
-      oldDelegate.phoneCaseColor != phoneCaseColor ||
-      oldDelegate.phoneScreenColor != phoneScreenColor ||
-      oldDelegate.bracketColor != bracketColor;
 }

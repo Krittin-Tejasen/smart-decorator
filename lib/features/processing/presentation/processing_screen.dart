@@ -80,22 +80,12 @@ class _ProcessingScreenState
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Text(
-                'Creating your design',
+                'Generating Room Design',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
                   color: AppColors.ink,
-                ),
-              ),
-
-              const SizedBox(height: 6),
-
-              const Text(
-                'Usually takes about 15 seconds',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: AppColors.muted,
                 ),
               ),
 
@@ -137,6 +127,29 @@ class _ProcessingScreenState
 
               ...processingState.steps.map(
                 (step) => _StepRow(step: step),
+              ),
+
+              const SizedBox(height: 20),
+
+              const Text(
+                'Working on your new room design...',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.ink,
+                ),
+              ),
+
+              const SizedBox(height: 6),
+
+              const Text(
+                'This may take a moment',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: AppColors.muted,
+                ),
               ),
 
               const Spacer(),
