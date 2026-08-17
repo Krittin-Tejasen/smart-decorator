@@ -36,19 +36,19 @@ class ProcessingNotifier extends StateNotifier<ProcessingState> {
         isCompleted: false,
         steps: [
           ProcessingStep(
-            title: 'Scanning Room',
+            title: 'Reading room scan',
             isCompleted: false,
             isActive: true,
           ),
 
           ProcessingStep(
-            title: 'Analyze & Generate',
+            title: 'Generating your room',
             isCompleted: false,
             isActive: false,
           ),
 
           ProcessingStep(
-            title: 'Finding matching products',
+            title: 'Finding matching furniture',
             isCompleted: false,
             isActive: false,
           ),

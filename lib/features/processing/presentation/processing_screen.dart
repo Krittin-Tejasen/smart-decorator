@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/widgets/app_icons.dart';
+import '../models/processing_step.dart';
 
 import '../providers/processing_provider.dart';
 
@@ -69,236 +71,154 @@ class _ProcessingScreenState
     final processingState = ref.watch(processingProvider);
 
     return Scaffold(
-
-      backgroundColor:
-          const Color(0xFFE5E5E5),
+      backgroundColor: AppColors.background,
 
       body: SafeArea(
-        child: Center(
-          child: Container(
-            margin:
-                const EdgeInsets.all(20),
-
-            padding:
-                const EdgeInsets.all(24),
-
-            decoration: BoxDecoration(
-              color: Colors.white,
-
-              borderRadius:
-                  BorderRadius.circular(40),
-            ),
-
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
-
-              children: [
-                const Center(
-                  child: Text(
-                    'Generating Room Design',
-
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight:
-                          FontWeight.bold,
-                    ),
-                  ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text(
+                'Creating your design',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.ink,
                 ),
+              ),
 
-                const SizedBox(height: 30),
+              const SizedBox(height: 6),
 
-                Container(
-                  height: 220,
-                  width: double.infinity,
-
-                  decoration: BoxDecoration(
-                    color: const Color(
-                      0xFFF5F5F5,
-                    ),
-
-                    borderRadius:
-                        BorderRadius.circular(
-                      30,
-                    ),
-                  ),
-
-                  child: const Center(
-                    child: Icon(
-                      Icons.chair_rounded,
-                      size: 120,
-                    ),
-                  ),
+              const Text(
+                'Usually takes about 15 seconds',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.muted,
                 ),
+              ),
 
-                const SizedBox(height: 30),
+              const SizedBox(height: 36),
 
-                ClipRRect(
-                  borderRadius:
-                      BorderRadius.circular(
-                    20,
-                  ),
-
-                  child:
-                      LinearProgressIndicator(
-                    minHeight: 14,
-
-                    value:
-                        processingState.progress,
-
-                    backgroundColor:
-                        Colors.grey.shade300,
-
-                    valueColor:
-                        const AlwaysStoppedAnimation(
-                      AppColors.primary,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 30),
-
-                ...processingState.steps.map(
-                  (step) {
-
-                    IconData icon;
-
-                    Color color;
-
-                    if (step.isCompleted) {
-
-                      icon =
-                          Icons.check_circle;
-
-                      color =
-                          AppColors.primary;
-                    }
-                    else if (step.isActive) {
-
-                      icon =
-                          Icons.radio_button_checked;
-
-                      color =
-                          AppColors.primary;
-                    }
-                    else {
-
-                      icon =
-                          Icons.radio_button_unchecked;
-
-                      color = Colors.grey;
-                    }
-
-                    return Padding(
-                      padding:
-                          const EdgeInsets.only(
-                        bottom: 18,
-                      ),
-
-                      child: Row(
-                        children: [
-
-                          Icon(
-                            icon,
-                            color: color,
-                          ),
-
-                          const SizedBox(
-                            width: 14,
-                          ),
-
-                          Text(
-                            step.title,
-
-                            style:
-                                const TextStyle(
-                              fontSize: 22,
-                              fontWeight:
-                                  FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-
-                const SizedBox(height: 20),
-
-                const Center(
-                  child:
-                      CircularProgressIndicator(
-                    color:
-                        AppColors.primary,
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                const Center(
-                  child: Text(
-                    'Working on your new room design...',
-                    style: TextStyle(
-                      fontSize: 18,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 10),
-
-                const Center(
-                  child: Text(
-                    'This may take a moment',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 30),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 60,
-
-                  child: ElevatedButton(
-                    style:
-                        ElevatedButton.styleFrom(
-                      backgroundColor:
-                          AppColors.primary,
-
-                      foregroundColor:
-                          Colors.white,
-
-                      shape:
-                          RoundedRectangleBorder(
-                        borderRadius:
-                            BorderRadius.circular(
-                          20,
-                        ),
+              SizedBox(
+                width: 160,
+                height: 160,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
+                      width: 160,
+                      height: 160,
+                      child: CircularProgressIndicator(
+                        value: processingState.progress,
+                        strokeWidth: 10,
+                        strokeCap: StrokeCap.round,
+                        backgroundColor: AppColors.sageTint,
+                        valueColor: const AlwaysStoppedAnimation(AppColors.brass),
                       ),
                     ),
-
-                    onPressed: () {},
-
-                    child: const Text(
-                      'Cancel',
-
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight:
-                            FontWeight.bold,
+                    Container(
+                      width: 116,
+                      height: 116,
+                      decoration: const BoxDecoration(
+                        color: AppColors.surface,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: SparkleIcon(size: 34, color: AppColors.sageDeep),
                       ),
                     ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 36),
+
+              ...processingState.steps.map(
+                (step) => _StepRow(step: step),
+              ),
+
+              const Spacer(),
+
+              TextButton(
+                onPressed: () {},
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.sage,
+                    decoration: TextDecoration.underline,
                   ),
                 ),
-              ],
-            ),
+              ),
+
+              const SizedBox(height: 12),
+            ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _StepRow extends StatelessWidget {
+  final ProcessingStep step;
+  const _StepRow({required this.step});
+
+  @override
+  Widget build(BuildContext context) {
+    late final Widget iconTile;
+    late final Color textColor;
+
+    if (step.isCompleted) {
+      iconTile = Container(
+        width: 34,
+        height: 34,
+        decoration: const BoxDecoration(color: AppColors.sageDeep, shape: BoxShape.circle),
+        child: const Icon(Icons.check_rounded, size: 18, color: Colors.white),
+      );
+      textColor = AppColors.ink;
+    } else if (step.isActive) {
+      iconTile = Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          color: AppColors.brassTint,
+          shape: BoxShape.circle,
+          border: Border.all(color: AppColors.brass, width: 2),
+        ),
+        child: Center(
+          child: SparkleIcon(size: 15, color: AppColors.brassDeep),
+        ),
+      );
+      textColor = AppColors.ink;
+    } else {
+      iconTile = Container(
+        width: 34,
+        height: 34,
+        decoration: const BoxDecoration(color: AppColors.sandTint, shape: BoxShape.circle),
+        child: const Icon(Icons.circle_outlined, size: 16, color: AppColors.muted),
+      );
+      textColor = AppColors.muted;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          iconTile,
+          const SizedBox(width: 14),
+          Text(
+            step.title,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: textColor,
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/widgets/app_icons.dart';
 import '../../../shared/providers/app_state_provider.dart';
 import '../../../shared/models/design_theme.dart';
 import '../../../shared/models/room_type.dart';
@@ -59,19 +60,19 @@ class HomeScreen extends ConsumerWidget {
       DesignTheme(
         id: 'minimal',
         title: 'Minimal',
-        color: AppColors.lightCard,
+        color: AppColors.sand,
       ),
 
       DesignTheme(
         id: 'modern',
         title: 'Modern',
-        color: AppColors.beige,
+        color: AppColors.sage,
       ),
 
       DesignTheme(
         id: 'luxury',
         title: 'Luxury',
-        color: AppColors.primary,
+        color: AppColors.brassDeep,
       ),
     ];
 
@@ -80,6 +81,7 @@ class HomeScreen extends ConsumerWidget {
     final canGenerate = appState.canGenerateDesign;
 
     return Scaffold(
+      backgroundColor: AppColors.background,
 
       body: SafeArea(
         child: Padding(
@@ -91,114 +93,186 @@ class HomeScreen extends ConsumerWidget {
 
               children: [
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
+
+                ///////////////  Eyebrow
+                Row(
+                  children: [
+                    const Icon(Icons.home_rounded, size: 16, color: AppColors.sage),
+                    const SizedBox(width: 6),
+                    Text(
+                      'SMART DECORATOR',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.1,
+                        color: AppColors.sage,
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 6),
 
                 ///////////////  App Title
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(
-                        text: 'Smart ',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      TextSpan(
-                        text: 'Decorator',
-                        style: TextStyle(
-                          fontWeight: FontWeight.normal,
-                        ),
-                      ),
-                    ],
-                  ),
+                const Text(
+                  'Scan, visualise,\nshop your room',
                   style: TextStyle(
-                    fontSize: 42,
-                    height: 1.2,
-                    color: AppColors.darkText,
+                    fontSize: 28,
+                    height: 1.25,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.ink,
                   ),
                 ),
 
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
 
                 ///////////////  App Subtitle
                 const Text(
-                  'Scan to Visualize & Shop Your Dream Room',
+                  'Real dimensions in, a finished room out.',
                   style: TextStyle(
-                    fontSize: 18,
-                    color: Colors.black54,
+                    fontSize: 14,
+                    color: AppColors.muted,
                     height: 1.4,
                   ),
                 ),
 
-                const SizedBox(height: 30),
+                const SizedBox(height: 28),
 
                 ///////////////  Room Type Options
-                const Text(
-                  'Choose a Room Type',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                const _SectionLabel('Room type'),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
 
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
 
                   children: roomTypes.map((room) {
-                    return GestureDetector(
-                      onTap: () {
-                        ref
-                          .read(appStateProvider.notifier)
-                          .selectRoomType(room);
-                      },
+                    final selected = appState.selectedRoomType?.id == room.id;
 
-                      child: AnimatedContainer(
-                        width: 100,
-                        padding: const EdgeInsets.all(12),
-                        duration: Duration(milliseconds: 180),
+                    return Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          right: room == roomTypes.last ? 0 : 10,
+                        ),
+                        child: GestureDetector(
+                          onTap: () {
+                            ref
+                              .read(appStateProvider.notifier)
+                              .selectRoomType(room);
+                          },
 
-                        decoration: BoxDecoration(
-                          color:
-                            appState.selectedRoomType?.id == room.id
-                              ? Colors.white
-                              : AppColors.lightCard,
-                          // color: AppColors.lightCard,
+                          child: AnimatedContainer(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            duration: const Duration(milliseconds: 180),
 
-                          borderRadius: BorderRadius.circular(20),
+                            decoration: BoxDecoration(
+                              color: AppColors.surface,
+                              borderRadius: BorderRadius.circular(16),
 
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.04),
-                              blurRadius: 12,
-                              offset: Offset(0, 4),
-                            )
-                          ],
+                              boxShadow: selected
+                                  ? [
+                                      BoxShadow(
+                                        color: AppColors.ink.withValues(alpha: 0.08),
+                                        blurRadius: 14,
+                                        offset: const Offset(0, 6),
+                                      ),
+                                    ]
+                                  : [],
 
-                          border: Border.all(
-                            color:
-                              appState.selectedRoomType?.id == room.id
-                                  ? AppColors.primary
-                                  : Colors.transparent,
+                              border: Border.all(
+                                color: selected ? AppColors.sage : Colors.transparent,
+                                width: 1.5,
+                              ),
+                            ),
 
-                            width: 3,
+                            child: Column(
+                              children: [
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: selected ? AppColors.sageTint : AppColors.sandTint,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Icon(
+                                    room.icon,
+                                    size: 20,
+                                    color: selected ? AppColors.sageDeep : AppColors.brassDeep,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  room.title,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: selected ? AppColors.ink : AppColors.muted,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+
+                const SizedBox(height: 26),
+
+                ///////////////  Theme Color Options
+                const _SectionLabel('Theme'),
+
+                const SizedBox(height: 12),
+
+                Row(
+                  children: themes.map((theme) {
+                    final selected = appState.selectedTheme?.id == theme.id;
+
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 16),
+                      child: GestureDetector(
+                        onTap: () {
+                          ref
+                            .read(appStateProvider.notifier)
+                            .selectTheme(theme);
+                        },
 
                         child: Column(
                           children: [
-
-                            Icon(
-                              room.icon,
-                              size: 40,
+                            AnimatedContainer(
+                              duration: const Duration(milliseconds: 180),
+                              width: 46,
+                              height: 46,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    theme.color,
+                                    Color.lerp(theme.color, Colors.black, 0.18)!,
+                                  ],
+                                ),
+                                border: Border.all(
+                                  color: selected ? AppColors.sage : Colors.transparent,
+                                  width: 2.5,
+                                ),
+                              ),
+                              child: selected
+                                  ? const Icon(Icons.check_rounded, color: Colors.white, size: 20)
+                                  : null,
                             ),
-
-                            const SizedBox(height: 10),
-
+                            const SizedBox(height: 6),
                             Text(
-                              room.title,
-                              textAlign: TextAlign.center,
+                              theme.title,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: selected ? AppColors.ink : AppColors.muted,
+                              ),
                             ),
                           ],
                         ),
@@ -207,156 +281,86 @@ class HomeScreen extends ConsumerWidget {
                   }).toList(),
                 ),
 
-                const SizedBox(height: 30),
-
-                ///////////////  Theme Color Options
-                const Text(
-                  'Choose Theme',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-
-                  children: themes.map((theme) {
-
-                    return GestureDetector(
-                      onTap: () {
-                        ref
-                          .read(appStateProvider.notifier)
-                          .selectTheme(theme);
-                      },
-
-                      child: AnimatedContainer(
-                        width: 100,
-                        height: 100,
-                        padding: const EdgeInsets.all(12),
-                        duration: Duration(milliseconds: 180),
-
-                        decoration: BoxDecoration(
-                          color: theme.color,
-                          borderRadius: BorderRadius.circular(20),
-                          
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.04),
-                              blurRadius: 12,
-                              offset: Offset(0, 4),
-                            )
-                          ],
-
-                          border: Border.all(
-                            color: appState.selectedTheme?.id == theme.id
-                                ? AppColors.primary
-                                : Colors.transparent,
-                            width: 3,
-                          ),
-                        ),
-
-                        child: Column(
-                          children: [
-                            Icon(
-                              Icons.palette_rounded,
-                              size: 40,
-                              color: Colors.white,
-                            ),
-
-                            const SizedBox(height: 10),
-
-                            Text(
-                              theme.title,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        )
-                      )
-                    );
-                  }).toList(),
-                ),
-
-
-                const SizedBox(height: 30),
+                const SizedBox(height: 26),
 
                 ///////////////  Upload Room Photo Section
-                const Text(
-                  'Upload Current Room Photo',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                const _SectionLabel('Current room photo'),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
 
-                ///////////////  Upload Button
-                GestureDetector(
-                  onTap: () {
-                    pickImage(ref);
-                  },
+                if (appState.uploadedImage == null)
+                  ///////////////  Upload Button
+                  GestureDetector(
+                    onTap: () {
+                      pickImage(ref);
+                    },
 
-                  child: Container(
-                    width: double.infinity,
+                    child: Container(
+                      width: double.infinity,
 
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 18,
-                    ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 18,
+                      ),
 
-                    decoration: BoxDecoration(
-                      color: AppColors.lightCard,
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-
-                    child: const Row(
-                      children: [
-
-                        Icon(
-                          Icons.camera_alt_rounded,
-                          color: AppColors.primary,
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: AppColors.muted.withValues(alpha: 0.35),
+                          width: 1.4,
+                          style: BorderStyle.solid,
                         ),
+                      ),
 
-                        SizedBox(width: 12),
-
-                        Text(
-                          'Upload Photo',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w500,
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: AppColors.sageTint,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              Icons.camera_alt_rounded,
+                              size: 18,
+                              color: AppColors.sageDeep,
+                            ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 12),
+                          const Text(
+                            'Upload photo',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.ink,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ),
-
-                if (appState.uploadedImage != null) ...[
-                  const SizedBox(height: 20),
+                  )
+                else
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(18),
                     child: Stack(
                       children: [
                         Image.file(
                           appState.uploadedImage!,
-                          height: 220,
+                          height: 150,
                           width: double.infinity,
                           fit: BoxFit.cover,
                         ),
                         Positioned(
-                          top: 12,
-                          right: 12,
+                          top: 10,
+                          right: 10,
                           child: Material(
-                            color: Colors.black.withValues(alpha: 0.55),
+                            color: AppColors.ink.withValues(alpha: 0.55),
                             shape: const CircleBorder(),
                             child: IconButton(
                               tooltip: 'Remove photo',
+                              iconSize: 18,
                               icon: const Icon(
                                 Icons.close_rounded,
                                 color: Colors.white,
@@ -372,18 +376,16 @@ class HomeScreen extends ConsumerWidget {
                       ],
                     ),
                   ),
-                ],
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 18),
 
                 ///////////////  LiDAR Scan Button Card
                 Material(
-                  color: const Color(0xFFDDE4E1),
+                  color: AppColors.sageDeep,
                   borderRadius: BorderRadius.circular(20),
+                  clipBehavior: Clip.antiAlias,
 
                   child: InkWell(
-                    borderRadius: BorderRadius.circular(20),
-
                     onTap: () async {
                       if (Platform.isAndroid) {
                         final proceed = await showDialog<bool>(
@@ -412,65 +414,85 @@ class HomeScreen extends ConsumerWidget {
                       if (context.mounted) context.push('/scan_room');
                     },
 
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(20),
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          right: -18,
+                          top: -18,
+                          child: Container(
+                            width: 90,
+                            height: 90,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white.withValues(alpha: 0.06),
+                            ),
+                          ),
+                        ),
 
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 18, 18, 4),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
 
-                        children: [
-
-                          const Row(
                             children: [
-
-                              Icon(
-                                Icons.wifi_tethering_rounded,
-                                size: 30,
+                              Row(
+                                children: [
+                                  const ScanBracketIcon(size: 18, color: AppColors.brass),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'Scan room with LiDAR',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
                               ),
 
-                              SizedBox(width: 12),
+                              const SizedBox(height: 4),
 
                               Text(
-                                'Scan Room\nwith LiDAR',
+                                'Tap corners, get exact room size',
                                 style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                  color: Colors.white.withValues(alpha: 0.75),
+                                ),
+                              ),
+
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: LidarHandIllustration(
+                                  width: 200,
+                                  height: 78,
+                                  bracketColor: AppColors.brass,
                                 ),
                               ),
                             ],
                           ),
-
-                          const SizedBox(height: 12),
-
-                          Text(
-                            'Precise 3D Room Scan with suitable iOS device',
-                            style: TextStyle(
-                              color: Colors.grey.shade700,
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
 
-                const SizedBox(height: 30),
+                const SizedBox(height: 26),
 
                 ///////////////  Generate Design Button
                 SizedBox(
                   width: double.infinity,
-                  height: 60,
+                  height: 56,
 
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: 
+                      backgroundColor:
                         canGenerate
-                          ? AppColors.primary
-                          : AppColors.primary.withValues(alpha: 0.5),
-                      foregroundColor: Colors.white,
+                          ? AppColors.brass
+                          : AppColors.brass.withValues(alpha: 0.45),
+                      foregroundColor: AppColors.ink,
+                      elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(18),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                     ),
 
@@ -483,9 +505,9 @@ class HomeScreen extends ConsumerWidget {
                       : null,
 
                     child: const Text(
-                      'Generate Design',
+                      'Generate design',
                       style: TextStyle(
-                        fontSize: 20,
+                        fontSize: 16,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -493,49 +515,80 @@ class HomeScreen extends ConsumerWidget {
                 ),
 
                 if(!canGenerate) ...[
-                  const SizedBox(height: 12),
-                  
+                  const SizedBox(height: 10),
+
                   const Center(
                     child: Text(
-                      'Please select room type, theme, and uplaod your room image',
+                      'Select a room type, theme, and photo to continue',
+                      textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Colors.grey
+                        fontSize: 12,
+                        color: AppColors.muted,
                       ),
                     )
                   )
                 ],
-                const SizedBox(height: 40),
+                const SizedBox(height: 36),
               ],
             ),
           ),
         ),
       ),
 
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: 0,
-        onTap: (index) {
-          if (index == 1) {
-            context.go('/history');
-          }
-        },
-
-        selectedItemColor:AppColors.primary,
-
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(
-              Icons.home_rounded,
-            ),
-            label: 'Home',
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: Border(
+            top: BorderSide(color: AppColors.ink.withValues(alpha: 0.06)),
           ),
+        ),
+        child: BottomNavigationBar(
+          currentIndex: 0,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          onTap: (index) {
+            if (index == 1) {
+              context.go('/history');
+            }
+          },
 
-          BottomNavigationBarItem(
-            icon: Icon(
-              Icons.history_rounded,
+          selectedItemColor: AppColors.sageDeep,
+          unselectedItemColor: AppColors.muted,
+
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(
+                Icons.home_rounded,
+              ),
+              label: 'Home',
             ),
-            label: 'History',
-          ),
-        ],
+
+            BottomNavigationBarItem(
+              icon: Icon(
+                Icons.history_rounded,
+              ),
+              label: 'History',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  final String text;
+  const _SectionLabel(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text.toUpperCase(),
+      style: const TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.6,
+        color: AppColors.ink,
       ),
     );
   }
