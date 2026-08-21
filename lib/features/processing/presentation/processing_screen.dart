@@ -22,11 +22,31 @@ class ProcessingScreen
 }
 
 class _ProcessingScreenState
-    extends ConsumerState<ProcessingScreen> {
+    extends ConsumerState<ProcessingScreen> with TickerProviderStateMixin {
+
+  bool _cancelled = false;
+
+  late final AnimationController _rotationController;
+  late final AnimationController _pulseController;
+  late final Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
+
+    _rotationController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2, milliseconds: 200),
+    )..repeat();
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat(reverse: true);
+
+    _pulseAnimation = Tween<double>(begin: 0.92, end: 1.08).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
 
     Future.microtask(() async {
       try {
@@ -38,6 +58,8 @@ class _ProcessingScreenState
           ref.read(processingProvider.notifier).startProcessing(),
           ref.read(appStateProvider.notifier).generateRoomDesign(),
         ]);
+
+        if (_cancelled || !mounted) return;
 
         ref
             .read(processingProvider.notifier)
@@ -53,16 +75,28 @@ class _ProcessingScreenState
       } catch (error) {
         debugPrint('Generate room failed: $error');
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Generate failed: $error'),
-            ),
-          );
-          context.go('/home');
-        }
+        if (_cancelled || !mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Generate failed: $error'),
+          ),
+        );
+        context.go('/home');
       }
     });
+  }
+
+  void _cancel() {
+    _cancelled = true;
+    context.go('/home');
+  }
+
+  @override
+  void dispose() {
+    _rotationController.dispose();
+    _pulseController.dispose();
+    super.dispose();
   }
 
   @override
@@ -97,26 +131,69 @@ class _ProcessingScreenState
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
+                    // Static track.
                     SizedBox(
                       width: 160,
                       height: 160,
                       child: CircularProgressIndicator(
-                        value: processingState.progress,
+                        value: 1,
                         strokeWidth: 10,
-                        strokeCap: StrokeCap.round,
                         backgroundColor: AppColors.sageTint,
-                        valueColor: const AlwaysStoppedAnimation(AppColors.brass),
+                        valueColor: const AlwaysStoppedAnimation(AppColors.sageTint),
                       ),
                     ),
-                    Container(
-                      width: 116,
-                      height: 116,
-                      decoration: const BoxDecoration(
-                        color: AppColors.surface,
-                        shape: BoxShape.circle,
+
+                    // Slim accent ring that keeps spinning so the screen
+                    // still reads as "working" even while progress is
+                    // holding steady between steps.
+                    RotationTransition(
+                      turns: _rotationController,
+                      child: SizedBox(
+                        width: 160,
+                        height: 160,
+                        child: CircularProgressIndicator(
+                          value: 0.16,
+                          strokeWidth: 3,
+                          strokeCap: StrokeCap.round,
+                          backgroundColor: Colors.transparent,
+                          valueColor: const AlwaysStoppedAnimation(AppColors.brassTint),
+                        ),
                       ),
-                      child: Center(
-                        child: SparkleIcon(size: 34, color: AppColors.sageDeep),
+                    ),
+
+                    // Real progress, tweened smoothly between step values
+                    // instead of snapping straight to the new value.
+                    TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0, end: processingState.progress),
+                      duration: const Duration(milliseconds: 650),
+                      curve: Curves.easeInOutCubic,
+                      builder: (context, value, _) {
+                        return SizedBox(
+                          width: 160,
+                          height: 160,
+                          child: CircularProgressIndicator(
+                            value: value,
+                            strokeWidth: 10,
+                            strokeCap: StrokeCap.round,
+                            backgroundColor: Colors.transparent,
+                            valueColor: const AlwaysStoppedAnimation(AppColors.brass),
+                          ),
+                        );
+                      },
+                    ),
+
+                    ScaleTransition(
+                      scale: _pulseAnimation,
+                      child: Container(
+                        width: 116,
+                        height: 116,
+                        decoration: const BoxDecoration(
+                          color: AppColors.surface,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: SparkleIcon(size: 34, color: AppColors.sageDeep),
+                        ),
                       ),
                     ),
                   ],
@@ -155,7 +232,7 @@ class _ProcessingScreenState
               const Spacer(),
 
               TextButton(
-                onPressed: () {},
+                onPressed: _cancel,
                 child: const Text(
                   'Cancel',
                   style: TextStyle(
@@ -182,38 +259,25 @@ class _StepRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    late final Widget iconTile;
+    late final Color bgColor;
+    late final Color? borderColor;
+    late final Widget icon;
     late final Color textColor;
 
     if (step.isCompleted) {
-      iconTile = Container(
-        width: 34,
-        height: 34,
-        decoration: const BoxDecoration(color: AppColors.sageDeep, shape: BoxShape.circle),
-        child: const Icon(Icons.check_rounded, size: 18, color: Colors.white),
-      );
+      bgColor = AppColors.sageDeep;
+      borderColor = null;
+      icon = const Icon(Icons.check_rounded, key: ValueKey('done'), size: 18, color: Colors.white);
       textColor = AppColors.ink;
     } else if (step.isActive) {
-      iconTile = Container(
-        width: 34,
-        height: 34,
-        decoration: BoxDecoration(
-          color: AppColors.brassTint,
-          shape: BoxShape.circle,
-          border: Border.all(color: AppColors.brass, width: 2),
-        ),
-        child: Center(
-          child: SparkleIcon(size: 15, color: AppColors.brassDeep),
-        ),
-      );
+      bgColor = AppColors.brassTint;
+      borderColor = AppColors.brass;
+      icon = SparkleIcon(key: const ValueKey('active'), size: 15, color: AppColors.brassDeep);
       textColor = AppColors.ink;
     } else {
-      iconTile = Container(
-        width: 34,
-        height: 34,
-        decoration: const BoxDecoration(color: AppColors.sandTint, shape: BoxShape.circle),
-        child: const Icon(Icons.circle_outlined, size: 16, color: AppColors.muted),
-      );
+      bgColor = AppColors.sandTint;
+      borderColor = null;
+      icon = const Icon(Icons.circle_outlined, key: ValueKey('pending'), size: 16, color: AppColors.muted);
       textColor = AppColors.muted;
     }
 
@@ -221,15 +285,32 @@ class _StepRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 7),
       child: Row(
         children: [
-          iconTile,
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOut,
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: bgColor,
+              shape: BoxShape.circle,
+              border: borderColor != null ? Border.all(color: borderColor, width: 2) : null,
+            ),
+            child: Center(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: icon,
+              ),
+            ),
+          ),
           const SizedBox(width: 14),
-          Text(
-            step.title,
+          AnimatedDefaultTextStyle(
+            duration: const Duration(milliseconds: 320),
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
               color: textColor,
             ),
+            child: Text(step.title),
           ),
         ],
       ),

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../shared/models/design_history.dart';
 import '../../../shared/providers/app_state_provider.dart';
+import '../../../shared/widgets/app_footer_nav.dart';
 
 class HistoryScreen extends ConsumerWidget {
 
@@ -23,6 +25,16 @@ class HistoryScreen extends ConsumerWidget {
 
       appBar: AppBar(
         backgroundColor: AppColors.background,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, color: AppColors.ink),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/home');
+            }
+          },
+        ),
         title: const Text(
           'History',
           style: TextStyle(
@@ -51,6 +63,8 @@ class HistoryScreen extends ConsumerWidget {
                 return _HistoryCard(item: item);
               },
             ),
+
+      bottomNavigationBar: const AppFooterNav(current: FooterTab.history),
     );
   }
 }

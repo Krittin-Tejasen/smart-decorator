@@ -9,6 +9,7 @@ import '../../../core/widgets/app_icons.dart';
 import '../../../shared/providers/app_state_provider.dart';
 import '../../../shared/models/design_theme.dart';
 import '../../../shared/models/room_type.dart';
+import '../../../shared/widgets/app_footer_nav.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -504,43 +505,7 @@ class HomeScreen extends ConsumerWidget {
         ),
       ),
 
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border(
-            top: BorderSide(color: AppColors.ink.withValues(alpha: 0.06)),
-          ),
-        ),
-        child: BottomNavigationBar(
-          currentIndex: 0,
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          onTap: (index) {
-            if (index == 1) {
-              context.go('/history');
-            }
-          },
-
-          selectedItemColor: AppColors.sageDeep,
-          unselectedItemColor: AppColors.muted,
-
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(
-                Icons.home_rounded,
-              ),
-              label: 'Home',
-            ),
-
-            BottomNavigationBarItem(
-              icon: Icon(
-                Icons.history_rounded,
-              ),
-              label: 'History',
-            ),
-          ],
-        ),
-      ),
+      bottomNavigationBar: const AppFooterNav(current: FooterTab.home),
     );
   }
 }

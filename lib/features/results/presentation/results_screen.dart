@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/app_colors.dart';
 
 import '../../../shared/providers/app_state_provider.dart';
+import '../../../shared/widgets/app_footer_nav.dart';
 
 import '../widgets/product_card.dart';
 
@@ -118,6 +119,8 @@ class ResultsScreen
           ),
         ),
       ),
+
+      bottomNavigationBar: const AppFooterNav(current: FooterTab.none),
     );
   }
 }
