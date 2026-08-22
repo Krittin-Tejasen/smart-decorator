@@ -23,6 +23,9 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 
+from app.services.embedding import encode_image
+from app.services.pinecone_client import query_similar
+from app.services.product_repo import fetch_product_by_id
 from segmentation import run_segmentation
 
 router = APIRouter(tags=["generation"])
@@ -256,23 +259,6 @@ async def generate_with_mock(room_type: str, theme: str, source_image: Image.Ima
     return build_data_url(buffer.getvalue(), "image/png")
 
 
-def mock_products() -> list[dict[str, Any]]:
-    return [
-        {
-            "id": "1",
-            "name": "Modern Sofa",
-            "imageUrl": "sofa",
-            "price": 12990,
-        },
-        {
-            "id": "2",
-            "name": "Minimal Lamp",
-            "imageUrl": "lamp",
-            "price": 2490,
-        },
-    ]
-
-
 @router.post("/generate-room")
 async def generate_room(
     room_type: str = Form(...),
@@ -304,14 +290,35 @@ async def generate_room(
             detail=f"Unsupported AI_IMAGE_PROVIDER: {provider}",
         )
 
+    _, encoded = generated_image.split(",", 1)
+    gen_bytes = base64.b64decode(encoded)
+
+    query_image = Image.open(BytesIO(gen_bytes))
+    query_vector = encode_image(query_image)
+    matches = query_similar(query_vector)
+
+    products = []
+    for item in matches:
+        unique_id = item["id"]
+        product = fetch_product_by_id(unique_id)
+        if product is None:
+            print(f"Warning: Product with ID {unique_id} not found in the database.")
+            continue
+        products.append(
+            {
+                "id": product["unique_id"],
+                "name": product["main_title"],
+                "imageUrl": product["main_image"],
+                "price": product["thb_price"],
+            }
+        )
+
     response: dict[str, Any] = {
         "generated_image": generated_image,
-        "products": mock_products(),
+        "products": products,
     }
 
     if segment:
-        _, encoded = generated_image.split(",", 1)
-        gen_bytes = base64.b64decode(encoded)
         seg_result = await run_segmentation(gen_bytes, "image/png")
         response["furniture_segments"] = seg_result.model_dump()
 
