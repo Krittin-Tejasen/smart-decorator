@@ -21,7 +21,7 @@ class _ManualBuilderViewState extends State<ManualBuilderView> {
               width: width * 40, // อัตราส่วนจำลอง (1 เมตร = 40 pixels)
               height: length * 40,
               decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.2),
+                color: Colors.blue.withValues(alpha: 0.2),
                 border: Border.all(color: Colors.blue, width: 2),
               ),
               child: Center(
@@ -67,7 +67,7 @@ class _ManualBuilderViewState extends State<ManualBuilderView> {
               ElevatedButton(
                 onPressed: () {
                   // TODO: จัดเก็บข้อมูลเป็น JSON เตรียมส่งขึ้น Cloud ให้ AI
-                  print("Room Size Saved: $width x $length");
+                  debugPrint("Room Size Saved: $width x $length");
                 },
                 child: const Text('ยืนยันขนาดห้อง'),
               )

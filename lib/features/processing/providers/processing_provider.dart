@@ -56,6 +56,10 @@ class ProcessingNotifier extends StateNotifier<ProcessingState> {
       ),
     );
 
+  /// Advances the fake step choreography up to "Finding matching products"
+  /// (in progress) and then stops -- it does NOT mark processing as complete.
+  /// Call [completeProcessing] once the real generate-room request actually
+  /// finishes, whether that happens sooner or later than this animation.
   Future<void> startProcessing() async {
 
     await Future.delayed(const Duration(seconds: 2));
@@ -81,7 +85,7 @@ class ProcessingNotifier extends StateNotifier<ProcessingState> {
 
       steps: [
         state.steps[0],
-        
+
         state.steps[1].copyWith(
           isCompleted: true,
           isActive: false,
@@ -92,16 +96,17 @@ class ProcessingNotifier extends StateNotifier<ProcessingState> {
         ),
       ],
     );
+  }
 
-    await Future.delayed(const Duration(seconds: 2));
+  void completeProcessing() {
     state = state.copyWith(
       progress: 1,
       isCompleted: true,
       steps: [
         state.steps[0],
-        
+
         state.steps[1],
-        
+
         state.steps[2].copyWith(
           isCompleted: true,
           isActive: false,

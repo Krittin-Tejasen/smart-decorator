@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class HardwareService {
@@ -12,7 +13,7 @@ class HardwareService {
       final bool hasLidar = await platform.invokeMethod('checkLidar');
       return hasLidar;
     } on PlatformException catch (e) {
-      print("Failed to check LiDAR: '${e.message}'.");
+      debugPrint("Failed to check LiDAR: '${e.message}'.");
       return false;
     }
   }
