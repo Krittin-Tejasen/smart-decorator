@@ -54,10 +54,11 @@ def test_image(image_path: str) -> None:
         bbox  = item["bbox"]
         colors = ", ".join(item["features"]["dominant_colors"])
         area  = item["features"]["area_pct"]
+        mask_kind = "sam2" if item["mask_precise"] else "bbox-approx"
 
         print(
             f"  [{item['id']}] {item['label']:<20} conf={conf:.2f}  "
-            f"area={area:.1f}%  colors={colors}"
+            f"area={area:.1f}%  colors={colors}  mask={mask_kind}"
         )
         print(
             f"       bbox x({bbox['x_min']:.2f}–{bbox['x_max']:.2f}) "
@@ -69,6 +70,12 @@ def test_image(image_path: str) -> None:
         crop_bytes = base64.b64decode(encoded)
         crop_path = CROPS_DIR / f"{path.stem}_{item['id']}_{label}.png"
         crop_path.write_bytes(crop_bytes)
+
+        # Save mask image (one mask per furniture item)
+        _, mask_encoded = item["mask_image"].split(",", 1)
+        mask_bytes = base64.b64decode(mask_encoded)
+        mask_path = CROPS_DIR / f"{path.stem}_{item['id']}_{label}_mask.png"
+        mask_path.write_bytes(mask_bytes)
 
     print(f"\nCrops saved to: {CROPS_DIR.resolve()}/")
 
