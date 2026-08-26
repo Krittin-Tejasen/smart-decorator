@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/widgets/app_icons.dart';
+import '../models/processing_step.dart';
 
 import '../providers/processing_provider.dart';
 
@@ -20,11 +22,31 @@ class ProcessingScreen
 }
 
 class _ProcessingScreenState
-    extends ConsumerState<ProcessingScreen> {
+    extends ConsumerState<ProcessingScreen> with TickerProviderStateMixin {
+
+  bool _cancelled = false;
+
+  late final AnimationController _rotationController;
+  late final AnimationController _pulseController;
+  late final Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
+
+    _rotationController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2, milliseconds: 200),
+    )..repeat();
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat(reverse: true);
+
+    _pulseAnimation = Tween<double>(begin: 0.92, end: 1.08).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
 
     Future.microtask(() async {
       try {
@@ -36,6 +58,8 @@ class _ProcessingScreenState
           ref.read(processingProvider.notifier).startProcessing(),
           ref.read(appStateProvider.notifier).generateRoomDesign(),
         ]);
+
+        if (_cancelled || !mounted) return;
 
         ref
             .read(processingProvider.notifier)
@@ -51,16 +75,28 @@ class _ProcessingScreenState
       } catch (error) {
         debugPrint('Generate room failed: $error');
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Generate failed: $error'),
-            ),
-          );
-          context.go('/home');
-        }
+        if (_cancelled || !mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Generate failed: $error'),
+          ),
+        );
+        context.go('/home');
       }
     });
+  }
+
+  void _cancel() {
+    _cancelled = true;
+    context.go('/home');
+  }
+
+  @override
+  void dispose() {
+    _rotationController.dispose();
+    _pulseController.dispose();
+    super.dispose();
   }
 
   @override
@@ -69,236 +105,214 @@ class _ProcessingScreenState
     final processingState = ref.watch(processingProvider);
 
     return Scaffold(
-
-      backgroundColor:
-          const Color(0xFFE5E5E5),
+      backgroundColor: AppColors.background,
 
       body: SafeArea(
-        child: Center(
-          child: Container(
-            margin:
-                const EdgeInsets.all(20),
-
-            padding:
-                const EdgeInsets.all(24),
-
-            decoration: BoxDecoration(
-              color: Colors.white,
-
-              borderRadius:
-                  BorderRadius.circular(40),
-            ),
-
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
-
-              children: [
-                const Center(
-                  child: Text(
-                    'Generating Room Design',
-
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight:
-                          FontWeight.bold,
-                    ),
-                  ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text(
+                'Generating Room Design',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.ink,
                 ),
+              ),
 
-                const SizedBox(height: 30),
+              const SizedBox(height: 36),
 
-                Container(
-                  height: 220,
-                  width: double.infinity,
-
-                  decoration: BoxDecoration(
-                    color: const Color(
-                      0xFFF5F5F5,
-                    ),
-
-                    borderRadius:
-                        BorderRadius.circular(
-                      30,
-                    ),
-                  ),
-
-                  child: const Center(
-                    child: Icon(
-                      Icons.chair_rounded,
-                      size: 120,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 30),
-
-                ClipRRect(
-                  borderRadius:
-                      BorderRadius.circular(
-                    20,
-                  ),
-
-                  child:
-                      LinearProgressIndicator(
-                    minHeight: 14,
-
-                    value:
-                        processingState.progress,
-
-                    backgroundColor:
-                        Colors.grey.shade300,
-
-                    valueColor:
-                        const AlwaysStoppedAnimation(
-                      AppColors.primary,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 30),
-
-                ...processingState.steps.map(
-                  (step) {
-
-                    IconData icon;
-
-                    Color color;
-
-                    if (step.isCompleted) {
-
-                      icon =
-                          Icons.check_circle;
-
-                      color =
-                          AppColors.primary;
-                    }
-                    else if (step.isActive) {
-
-                      icon =
-                          Icons.radio_button_checked;
-
-                      color =
-                          AppColors.primary;
-                    }
-                    else {
-
-                      icon =
-                          Icons.radio_button_unchecked;
-
-                      color = Colors.grey;
-                    }
-
-                    return Padding(
-                      padding:
-                          const EdgeInsets.only(
-                        bottom: 18,
+              SizedBox(
+                width: 160,
+                height: 160,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // Static track.
+                    SizedBox(
+                      width: 160,
+                      height: 160,
+                      child: CircularProgressIndicator(
+                        value: 1,
+                        strokeWidth: 10,
+                        backgroundColor: AppColors.sageTint,
+                        valueColor: const AlwaysStoppedAnimation(AppColors.sageTint),
                       ),
-
-                      child: Row(
-                        children: [
-
-                          Icon(
-                            icon,
-                            color: color,
-                          ),
-
-                          const SizedBox(
-                            width: 14,
-                          ),
-
-                          Text(
-                            step.title,
-
-                            style:
-                                const TextStyle(
-                              fontSize: 22,
-                              fontWeight:
-                                  FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-
-                const SizedBox(height: 20),
-
-                const Center(
-                  child:
-                      CircularProgressIndicator(
-                    color:
-                        AppColors.primary,
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                const Center(
-                  child: Text(
-                    'Working on your new room design...',
-                    style: TextStyle(
-                      fontSize: 18,
                     ),
-                  ),
-                ),
 
-                const SizedBox(height: 10),
-
-                const Center(
-                  child: Text(
-                    'This may take a moment',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 30),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 60,
-
-                  child: ElevatedButton(
-                    style:
-                        ElevatedButton.styleFrom(
-                      backgroundColor:
-                          AppColors.primary,
-
-                      foregroundColor:
-                          Colors.white,
-
-                      shape:
-                          RoundedRectangleBorder(
-                        borderRadius:
-                            BorderRadius.circular(
-                          20,
+                    // Slim accent ring that keeps spinning so the screen
+                    // still reads as "working" even while progress is
+                    // holding steady between steps.
+                    RotationTransition(
+                      turns: _rotationController,
+                      child: SizedBox(
+                        width: 160,
+                        height: 160,
+                        child: CircularProgressIndicator(
+                          value: 0.16,
+                          strokeWidth: 3,
+                          strokeCap: StrokeCap.round,
+                          backgroundColor: Colors.transparent,
+                          valueColor: const AlwaysStoppedAnimation(AppColors.brassTint),
                         ),
                       ),
                     ),
 
-                    onPressed: () {},
+                    // Real progress, tweened smoothly between step values
+                    // instead of snapping straight to the new value.
+                    TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0, end: processingState.progress),
+                      duration: const Duration(milliseconds: 650),
+                      curve: Curves.easeInOutCubic,
+                      builder: (context, value, _) {
+                        return SizedBox(
+                          width: 160,
+                          height: 160,
+                          child: CircularProgressIndicator(
+                            value: value,
+                            strokeWidth: 10,
+                            strokeCap: StrokeCap.round,
+                            backgroundColor: Colors.transparent,
+                            valueColor: const AlwaysStoppedAnimation(AppColors.brass),
+                          ),
+                        );
+                      },
+                    ),
 
-                    child: const Text(
-                      'Cancel',
-
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight:
-                            FontWeight.bold,
+                    ScaleTransition(
+                      scale: _pulseAnimation,
+                      child: Container(
+                        width: 116,
+                        height: 116,
+                        decoration: const BoxDecoration(
+                          color: AppColors.surface,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: SparkleIcon(size: 34, color: AppColors.sageDeep),
+                        ),
                       ),
                     ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 36),
+
+              ...processingState.steps.map(
+                (step) => _StepRow(step: step),
+              ),
+
+              const SizedBox(height: 20),
+
+              const Text(
+                'Working on your new room design...',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.ink,
+                ),
+              ),
+
+              const SizedBox(height: 6),
+
+              const Text(
+                'This may take a moment',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: AppColors.muted,
+                ),
+              ),
+
+              const Spacer(),
+
+              TextButton(
+                onPressed: _cancel,
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.sage,
+                    decoration: TextDecoration.underline,
                   ),
                 ),
-              ],
-            ),
+              ),
+
+              const SizedBox(height: 12),
+            ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _StepRow extends StatelessWidget {
+  final ProcessingStep step;
+  const _StepRow({required this.step});
+
+  @override
+  Widget build(BuildContext context) {
+    late final Color bgColor;
+    late final Color? borderColor;
+    late final Widget icon;
+    late final Color textColor;
+
+    if (step.isCompleted) {
+      bgColor = AppColors.sageDeep;
+      borderColor = null;
+      icon = const Icon(Icons.check_rounded, key: ValueKey('done'), size: 18, color: Colors.white);
+      textColor = AppColors.ink;
+    } else if (step.isActive) {
+      bgColor = AppColors.brassTint;
+      borderColor = AppColors.brass;
+      icon = SparkleIcon(key: const ValueKey('active'), size: 15, color: AppColors.brassDeep);
+      textColor = AppColors.ink;
+    } else {
+      bgColor = AppColors.sandTint;
+      borderColor = null;
+      icon = const Icon(Icons.circle_outlined, key: ValueKey('pending'), size: 16, color: AppColors.muted);
+      textColor = AppColors.muted;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOut,
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: bgColor,
+              shape: BoxShape.circle,
+              border: borderColor != null ? Border.all(color: borderColor, width: 2) : null,
+            ),
+            child: Center(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: icon,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          AnimatedDefaultTextStyle(
+            duration: const Duration(milliseconds: 320),
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: textColor,
+            ),
+            child: Text(step.title),
+          ),
+        ],
       ),
     );
   }

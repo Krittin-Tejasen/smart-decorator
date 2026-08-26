@@ -116,6 +116,6 @@ class ProcessingNotifier extends StateNotifier<ProcessingState> {
   }
 }
 
-final processingProvider = StateNotifierProvider<ProcessingNotifier, ProcessingState>((ref) {
+final processingProvider = StateNotifierProvider.autoDispose<ProcessingNotifier, ProcessingState>((ref) {
       return ProcessingNotifier();
 });

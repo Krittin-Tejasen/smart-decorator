@@ -13,101 +13,92 @@ class ProductCard extends StatelessWidget {
     required this.product,
   });
 
+  IconData get _icon {
+    final key = product.imageUrl.toLowerCase();
+    if (key.contains('sofa') || key.contains('chair')) return Icons.weekend_rounded;
+    if (key.contains('lamp') || key.contains('light')) return Icons.emoji_objects_outlined;
+    if (key.contains('table') || key.contains('desk')) return Icons.table_restaurant_rounded;
+    if (key.contains('bed')) return Icons.bed_rounded;
+    if (key.contains('rug') || key.contains('carpet')) return Icons.crop_square_rounded;
+    return Icons.category_rounded;
+  }
+
+  Color get _tileColor {
+    final index = product.id.hashCode % 3;
+    switch (index) {
+      case 0:
+        return AppColors.sageTint;
+      case 1:
+        return AppColors.sandTint;
+      default:
+        return AppColors.brassTint;
+    }
+  }
+
+  Color get _iconColor {
+    final index = product.id.hashCode % 3;
+    switch (index) {
+      case 0:
+        return AppColors.sageDeep;
+      case 1:
+        return AppColors.brassDeep;
+      default:
+        return AppColors.brassDeep;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
 
     return Container(
-      margin: const EdgeInsets.only(
-        bottom: 20,
-      ),
-
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(10),
 
       decoration: BoxDecoration(
-        color: Colors.white,
-
-        borderRadius:
-            BorderRadius.circular(28),
-
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
-
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0,4,),
+            color: AppColors.ink.withValues(alpha: 0.06),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
 
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-
           Container(
-            width: 110,
-            height: 110,
-
+            height: 64,
+            width: double.infinity,
             decoration: BoxDecoration(
-              color: Colors.grey.shade600,
-              borderRadius: BorderRadius.circular(24),
+              color: _tileColor,
+              borderRadius: BorderRadius.circular(10),
             ),
+            child: Icon(_icon, size: 26, color: _iconColor),
+          ),
 
-            child: const Center(
-              child: Text(
-                'Product\nImage',
+          const SizedBox(height: 8),
 
-                textAlign:
-                    TextAlign.center,
-
-                style: TextStyle(
-                  color: Colors.white,
-
-                  fontSize: 20,
-                ),
-              ),
+          Text(
+            product.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: AppColors.ink,
             ),
           ),
 
-          const SizedBox(width: 20),
+          const SizedBox(height: 2),
 
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  product.name,
-                  style:
-                      const TextStyle(
-                    fontSize: 26,
-                    fontWeight:
-                        FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-
-                Text(
-                  '฿ ${product.price.toStringAsFixed(0)}',
-
-                  style: const TextStyle(fontSize: 18,),
-                ),
-
-                const SizedBox(height: 20),
-
-                Align(
-                  alignment: Alignment.centerRight,
-
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor:AppColors.primary,
-                      foregroundColor:Colors.white,
-                    ),
-                    onPressed: () {},
-                    child: const Text(
-                      'View Product',
-                    ),
-                  ),
-                ),
-              ],
+          Text(
+            '฿${product.price.toStringAsFixed(0)}',
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: AppColors.sageDeep,
             ),
           ),
         ],
