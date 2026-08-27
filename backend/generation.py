@@ -3,8 +3,10 @@ generation.py
 ──────────────
 POST /generate-room
   Accepts a room photo + room_type/style/color (multipart), returns a
-  redesigned room image. Optionally runs furniture segmentation on the
-  result when segment=true.
+  redesigned room image. A Critic Agent checks the result against the
+  requested room/style/color and triggers one automatic retry if it
+  doesn't match (skipped for the mock provider). Optionally runs
+  furniture segmentation on the result when segment=true.
 
 Image providers (chosen via AI_IMAGE_PROVIDER env var):
   • gemini      — Gemini image generation (default)
@@ -155,6 +157,93 @@ async def compose_design_prompt(room_type: str, style: str, color: str) -> str:
 def build_data_url(image_bytes: bytes, mime_type: str) -> str:
     encoded_image = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:{mime_type};base64,{encoded_image}"
+
+
+def decode_data_url(data_url: str) -> tuple[bytes, str]:
+    header, encoded = data_url.split(",", 1)
+    mime_type = header.split(":", 1)[1].split(";", 1)[0] if ":" in header else "image/png"
+    return base64.b64decode(encoded), mime_type
+
+
+_CRITIC_SYSTEM_PROMPT = """
+You are a strict quality checker for an AI interior-design image generator.
+You will be shown a redecorated room photo along with the room type and
+style it was supposed to become. Judge only two things: (1) does the image
+plausibly show that room type, and (2) does the decor plausibly match the
+requested style/color intent. Ignore minor imperfections - only fail
+obvious mismatches (wrong room type entirely, or a style/color that is
+clearly not what was asked for, or a refusal/blank/error image).
+
+Reply with exactly one line: either "PASS" or "FAIL: <short reason>".
+""".strip()
+
+
+async def critique_generated_image(
+    image_bytes: bytes,
+    mime_type: str,
+    room_type: str,
+    style: str,
+    color: str,
+) -> bool:
+    """Critic Agent: asks Gemini Vision whether the generated image actually
+    matches the requested room/style/color before handing it back to the
+    user. Returns True (pass) whenever the check can't be completed (no API
+    key, network error, unexpected response) - a broken critic should never
+    block a user's generation, only a *confirmed* mismatch should.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return True
+
+    model = os.getenv("GEMINI_CRITIC_MODEL", "gemini-3.6-flash")
+    style_desc = _STYLE_DESCRIPTIONS.get(style, style)
+    color_desc = _COLOR_DESCRIPTIONS.get(color, color)
+
+    payload = {
+        "systemInstruction": {"parts": [{"text": _CRITIC_SYSTEM_PROMPT}]},
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": (
+                            f"Intended room type: {room_type}\n"
+                            f"Intended style: {style_desc}\n"
+                            f"Intended color: {color_desc}"
+                        ),
+                    },
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": base64.b64encode(image_bytes).decode("utf-8"),
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent",
+                headers={
+                    "x-goog-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            response_data = response.json()
+
+        verdict = response_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception as exc:
+        print(f"critique_generated_image failed, treating as pass: {exc}")
+        return True
+
+    passed = verdict.upper().startswith("PASS")
+    if not passed:
+        print(f"critique_generated_image flagged a mismatch: {verdict}")
+    return passed
 
 
 def first_output_url(value: Any) -> str | None:
@@ -411,17 +500,29 @@ async def generate_room(
 
     provider = os.getenv("AI_IMAGE_PROVIDER", "gemini").lower()
 
-    if provider == "mock":
-        generated_image = await generate_with_mock(room_type, style, color, source_image)
-    elif provider == "replicate":
-        generated_image = await generate_with_replicate(prompt, image_bytes, mime_type)
-    elif provider == "gemini":
-        generated_image = await generate_with_gemini(prompt, image_bytes, mime_type)
-    else:
+    async def run_provider() -> str:
+        if provider == "mock":
+            return await generate_with_mock(room_type, style, color, source_image)
+        if provider == "replicate":
+            return await generate_with_replicate(prompt, image_bytes, mime_type)
+        if provider == "gemini":
+            return await generate_with_gemini(prompt, image_bytes, mime_type)
         raise HTTPException(
             status_code=500,
             detail=f"Unsupported AI_IMAGE_PROVIDER: {provider}",
         )
+
+    generated_image = await run_provider()
+
+    # Critic Agent: the mock provider just watermarks the original photo, so
+    # there's nothing to judge. Real providers get one automatic retry if the
+    # first attempt doesn't actually match what was asked for.
+    if provider != "mock":
+        gen_bytes, gen_mime = decode_data_url(generated_image)
+        passed = await critique_generated_image(gen_bytes, gen_mime, room_type, style, color)
+        if not passed:
+            print("Critic Agent rejected the first attempt, regenerating once...")
+            generated_image = await run_provider()
 
     response: dict[str, Any] = {
         "generated_image": generated_image,
