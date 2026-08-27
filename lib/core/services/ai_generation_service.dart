@@ -16,7 +16,8 @@ class AIGenerationService {
   ) async {
     final formData = FormData.fromMap({
       'room_type': request.roomType,
-      'theme': request.theme,
+      'style': request.style,
+      'color': request.color,
       'image': await MultipartFile.fromFile(
         request.imagePath,
         filename: request.imagePath.split(RegExp(r'[\\/]')).last,

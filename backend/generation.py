@@ -2,9 +2,9 @@
 generation.py
 ──────────────
 POST /generate-room
-  Accepts a room photo + room_type/theme (multipart), returns a redesigned
-  room image. Optionally runs furniture segmentation on the result when
-  segment=true.
+  Accepts a room photo + room_type/style/color (multipart), returns a
+  redesigned room image. Optionally runs furniture segmentation on the
+  result when segment=true.
 
 Image providers (chosen via AI_IMAGE_PROVIDER env var):
   • gemini      — Gemini image generation (default)
@@ -27,16 +27,129 @@ from segmentation import run_segmentation
 
 router = APIRouter(tags=["generation"])
 
+# ── Style/color descriptions fed to the prompt-composition agent ──────────
+# Keep these in sync with the style/color ids the app sends
+# (lib/features/home/presentation/home_screen.dart). Room type, style, and
+# color together form a fixed, enumerable set (5 x 3 x 3 = 45 combinations),
+# so composed prompts are cached below instead of re-generated every request.
 
-def build_room_prompt(room_type: str, theme: str) -> str:
+_STYLE_DESCRIPTIONS: dict[str, str] = {
+    "japandi": (
+        "Japandi (a warm, minimalist blend of Japanese and Scandinavian "
+        "design): light oak and pale wood furniture, clean simple lines, "
+        "natural textures, uncluttered layout"
+    ),
+    "industrial_loft": (
+        "Industrial / Loft: exposed concrete and brick, black steel frames, "
+        "dark stained wood, utilitarian raw-material finishes"
+    ),
+    "modern_luxury": (
+        "Modern Luxury: polished marble and glass surfaces, metallic gold "
+        "or chrome accents, glossy finishes, upscale contemporary furniture"
+    ),
+}
+
+_COLOR_DESCRIPTIONS: dict[str, str] = {
+    "warm_oat_cream": "warm oat and cream tones on walls and soft furnishings",
+    "muted_sage_green": "a muted, earthy sage green on accent walls and cushions",
+    "soft_terracotta": "a soft, faded terracotta on accent walls and textiles",
+    "raw_concrete_matte_black": "raw concrete grey paired with matte black fixtures",
+    "rusty_brick_leather": "rusty brick red paired with dark leather upholstery",
+    "dark_navy_blue": "a dark navy blue on accent walls and upholstery",
+    "ivory_champagne_gold": "ivory white paired with champagne gold accents",
+    "emerald_green_brass": "deep emerald green paired with brass accents",
+    "midnight_blue_silver": "midnight blue paired with silver/chrome accents",
+}
+
+_COMPOSER_SYSTEM_PROMPT = """
+You are an interior-design prompt writer for an AI image generator.
+Given a room type, a design style, and an accent color description, write
+ONE vivid English paragraph (60-100 words) instructing the generator how to
+redecorate the room.
+
+Rules:
+- Use natural descriptive language only. Never use attention-weighting
+  syntax such as (word:1.2) - the target model does not support it.
+- Mention concrete furniture, materials, and lighting appropriate to the
+  style and color.
+- Do not mention changing the room layout, walls, windows, doors, or
+  camera angle - those must be preserved as-is.
+- Output only the paragraph, no headings or extra commentary.
+""".strip()
+
+# room_type/style/color id combo -> composed prompt. Cleared only on process
+# restart; the combos are a fixed, small set so this stays warm in practice.
+_PROMPT_CACHE: dict[tuple[str, str, str], str] = {}
+
+
+def build_static_fallback_prompt(room_type: str, style: str, color: str) -> str:
+    """Used if the prompt-composition agent call fails for any reason, so a
+    hiccup in that extra LLM call never breaks the /generate-room endpoint.
+    """
+    style_desc = _STYLE_DESCRIPTIONS.get(style, style)
+    color_desc = _COLOR_DESCRIPTIONS.get(color, color)
     return f"""
-Redesign this uploaded {room_type} as a realistic {theme} interior design.
+Redesign this uploaded {room_type} as a realistic interior in the following
+style: {style_desc}. Use {color_desc}.
 Preserve the original room layout, walls, floor, windows, doors, and visible fixtures.
 Do not change the room structure or camera angle.
 Add realistic furniture and decor that fit the room scale.
 Keep enough walking space and avoid blocking doors, windows, outlets, and switches.
 Return a photorealistic decorated room image only.
 """.strip()
+
+
+async def compose_design_prompt(room_type: str, style: str, color: str) -> str:
+    """Prompt-composition agent: turns the short room/style/color ids into a
+    single descriptive, natural-language paragraph via a cheap text-only
+    Gemini call. Results are cached per id combo (see _PROMPT_CACHE) since
+    the option set is fixed and small - repeat requests for the same
+    combination cost nothing after the first.
+    """
+    cache_key = (room_type, style, color)
+    if cache_key in _PROMPT_CACHE:
+        return _PROMPT_CACHE[cache_key]
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured on the backend.")
+
+    model = os.getenv("GEMINI_PROMPT_MODEL", "gemini-3.5-flash-lite")
+    style_desc = _STYLE_DESCRIPTIONS.get(style, style)
+    color_desc = _COLOR_DESCRIPTIONS.get(color, color)
+
+    payload = {
+        "systemInstruction": {"parts": [{"text": _COMPOSER_SYSTEM_PROMPT}]},
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": (
+                            f"Room type: {room_type}\n"
+                            f"Style: {style_desc}\n"
+                            f"Color: {color_desc}"
+                        ),
+                    },
+                ],
+            },
+        ],
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent",
+            headers={
+                "x-goog-api-key": api_key,
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        response_data = response.json()
+
+    text = response_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    _PROMPT_CACHE[cache_key] = text
+    return text
 
 
 def build_data_url(image_bytes: bytes, mime_type: str) -> str:
@@ -233,7 +346,7 @@ async def generate_with_replicate(prompt: str, image_bytes: bytes, mime_type: st
     raise HTTPException(status_code=504, detail="Replicate generation timed out.")
 
 
-async def generate_with_mock(room_type: str, theme: str, source_image: Image.Image) -> str:
+async def generate_with_mock(room_type: str, style: str, color: str, source_image: Image.Image) -> str:
     """Echo the uploaded photo with a watermark instead of calling a paid AI provider.
 
     Lets the rest of the pipeline (upload, processing, results, history) be built and
@@ -247,7 +360,7 @@ async def generate_with_mock(room_type: str, theme: str, source_image: Image.Ima
     draw.rectangle([(0, 0), (preview.width, banner_height)], fill=(0, 0, 0, 160))
     draw.text(
         (16, banner_height // 4),
-        f"MOCK PREVIEW - {theme} {room_type} (no AI call made)",
+        f"MOCK PREVIEW - {style}/{color} {room_type} (no AI call made)",
         fill=(255, 255, 255, 255),
     )
 
@@ -276,7 +389,8 @@ def mock_products() -> list[dict[str, Any]]:
 @router.post("/generate-room")
 async def generate_room(
     room_type: str = Form(...),
-    theme: str = Form(...),
+    style: str = Form(...),
+    color: str = Form(...),
     image: UploadFile = File(...),
     segment: bool = Form(False),
 ):
@@ -289,11 +403,16 @@ async def generate_room(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.") from exc
 
-    prompt = build_room_prompt(room_type, theme)
+    try:
+        prompt = await compose_design_prompt(room_type, style, color)
+    except Exception as exc:
+        print(f"compose_design_prompt failed, falling back to static prompt: {exc}")
+        prompt = build_static_fallback_prompt(room_type, style, color)
+
     provider = os.getenv("AI_IMAGE_PROVIDER", "gemini").lower()
 
     if provider == "mock":
-        generated_image = await generate_with_mock(room_type, theme, source_image)
+        generated_image = await generate_with_mock(room_type, style, color, source_image)
     elif provider == "replicate":
         generated_image = await generate_with_replicate(prompt, image_bytes, mime_type)
     elif provider == "gemini":
