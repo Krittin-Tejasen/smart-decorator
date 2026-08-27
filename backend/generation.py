@@ -83,6 +83,18 @@ Rules:
 # restart; the combos are a fixed, small set so this stays warm in practice.
 _PROMPT_CACHE: dict[tuple[str, str, str], str] = {}
 
+# Hard structural constraints that must reach the image model on every
+# single request, regardless of whether the prompt-composition agent
+# succeeded or the static fallback kicked in. The composer only writes the
+# style/furniture description - it is explicitly told not to talk about
+# layout changes, but that alone doesn't put "keep the doors/windows/outlets
+# visible" text in front of the image model, which is what actually keeps it
+# from painting over them. This clause is appended after whichever prompt
+# path ran, so it's never at the mercy of what the composer happened to say.
+_STRUCTURE_PRESERVATION_CLAUSE = """
+Preserve the original room layout, walls, floor, windows, doors, and all visible fixtures exactly as shown in the photo. Do not change the room structure, camera angle, or perspective. Every door, window, electrical outlet, and light switch visible in the original photo must remain fully visible and unobstructed in the result - do not place furniture, decor, or any object in front of, over, or blocking them. Leave enough open walking space. Return a photorealistic decorated room image only.
+""".strip()
+
 
 def build_static_fallback_prompt(room_type: str, style: str, color: str) -> str:
     """Used if the prompt-composition agent call fails for any reason, so a
@@ -90,15 +102,11 @@ def build_static_fallback_prompt(room_type: str, style: str, color: str) -> str:
     """
     style_desc = _STYLE_DESCRIPTIONS.get(style, style)
     color_desc = _COLOR_DESCRIPTIONS.get(color, color)
-    return f"""
-Redesign this uploaded {room_type} as a realistic interior in the following
-style: {style_desc}. Use {color_desc}.
-Preserve the original room layout, walls, floor, windows, doors, and visible fixtures.
-Do not change the room structure or camera angle.
-Add realistic furniture and decor that fit the room scale.
-Keep enough walking space and avoid blocking doors, windows, outlets, and switches.
-Return a photorealistic decorated room image only.
-""".strip()
+    return (
+        f"Redesign this uploaded {room_type} as a realistic interior in the "
+        f"following style: {style_desc}. Use {color_desc}.\n\n"
+        f"{_STRUCTURE_PRESERVATION_CLAUSE}"
+    )
 
 
 async def compose_design_prompt(room_type: str, style: str, color: str) -> str:
@@ -167,29 +175,44 @@ def decode_data_url(data_url: str) -> tuple[bytes, str]:
 
 _CRITIC_SYSTEM_PROMPT = """
 You are a strict quality checker for an AI interior-design image generator.
-You will be shown a redecorated room photo along with the room type and
-style it was supposed to become. Judge only two things: (1) does the image
-plausibly show that room type, and (2) does the decor plausibly match the
-requested style/color intent. Ignore minor imperfections - only fail
-obvious mismatches (wrong room type entirely, or a style/color that is
-clearly not what was asked for, or a refusal/blank/error image).
+You will be shown two photos: the ORIGINAL room photo the user uploaded, and
+the REDECORATED result the AI produced from it, along with the room type and
+style/color it was supposed to become.
+
+Check all of the following against the REDECORATED photo:
+1. It plausibly shows the same room type as intended.
+2. The decor plausibly matches the requested style/color intent.
+3. Every door, window, and visible electrical outlet/light switch that
+   appears in the ORIGINAL photo is still visible and NOT obstructed,
+   covered, or removed in the REDECORATED photo - new furniture or decor
+   must not block them.
+4. The room's overall layout, walls, and camera angle still look like the
+   same room, not a different one.
+
+Ignore minor imperfections - only fail on a clear, obvious violation (e.g. a
+window that disappeared, a door blocked by a sofa, an outlet painted over,
+the wrong room type, or a style/color that is clearly not what was asked
+for).
 
 Reply with exactly one line: either "PASS" or "FAIL: <short reason>".
 """.strip()
 
 
 async def critique_generated_image(
-    image_bytes: bytes,
-    mime_type: str,
+    original_bytes: bytes,
+    original_mime: str,
+    generated_bytes: bytes,
+    generated_mime: str,
     room_type: str,
     style: str,
     color: str,
 ) -> bool:
-    """Critic Agent: asks Gemini Vision whether the generated image actually
-    matches the requested room/style/color before handing it back to the
-    user. Returns True (pass) whenever the check can't be completed (no API
-    key, network error, unexpected response) - a broken critic should never
-    block a user's generation, only a *confirmed* mismatch should.
+    """Critic Agent: asks Gemini Vision to compare the generated image against
+    the original photo, checking both style/room-type intent and that doors,
+    windows, and outlets/switches from the original weren't covered or
+    removed. Returns True (pass) whenever the check can't be completed (no
+    API key, network error, unexpected response) - a broken critic should
+    never block a user's generation, only a *confirmed* mismatch should.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -208,13 +231,21 @@ async def critique_generated_image(
                         "text": (
                             f"Intended room type: {room_type}\n"
                             f"Intended style: {style_desc}\n"
-                            f"Intended color: {color_desc}"
+                            f"Intended color: {color_desc}\n\n"
+                            "Here is the ORIGINAL photo:"
                         ),
                     },
                     {
                         "inline_data": {
-                            "mime_type": mime_type,
-                            "data": base64.b64encode(image_bytes).decode("utf-8"),
+                            "mime_type": original_mime,
+                            "data": base64.b64encode(original_bytes).decode("utf-8"),
+                        },
+                    },
+                    {"text": "Here is the REDECORATED result:"},
+                    {
+                        "inline_data": {
+                            "mime_type": generated_mime,
+                            "data": base64.b64encode(generated_bytes).decode("utf-8"),
                         },
                     },
                 ],
@@ -493,7 +524,11 @@ async def generate_room(
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.") from exc
 
     try:
-        prompt = await compose_design_prompt(room_type, style, color)
+        style_paragraph = await compose_design_prompt(room_type, style, color)
+        # The composer only writes the style/furniture description - the hard
+        # "don't cover the doors/windows/outlets" constraint always gets
+        # appended here rather than trusted to the composer's output.
+        prompt = f"{style_paragraph}\n\n{_STRUCTURE_PRESERVATION_CLAUSE}"
     except Exception as exc:
         print(f"compose_design_prompt failed, falling back to static prompt: {exc}")
         prompt = build_static_fallback_prompt(room_type, style, color)
@@ -516,12 +551,22 @@ async def generate_room(
 
     # Critic Agent: the mock provider just watermarks the original photo, so
     # there's nothing to judge. Real providers get one automatic retry if the
-    # first attempt doesn't actually match what was asked for.
+    # first attempt doesn't actually match what was asked for, comparing
+    # against the original photo so it can specifically catch a covered or
+    # missing door/window/outlet, not just a wrong room type/style.
     if provider != "mock":
         gen_bytes, gen_mime = decode_data_url(generated_image)
-        passed = await critique_generated_image(gen_bytes, gen_mime, room_type, style, color)
+        passed = await critique_generated_image(
+            image_bytes, mime_type, gen_bytes, gen_mime, room_type, style, color
+        )
         if not passed:
             print("Critic Agent rejected the first attempt, regenerating once...")
+            retry_reminder = (
+                "\n\nIMPORTANT: the previous attempt failed review for covering or "
+                "removing a door, window, outlet, or switch. Be strict about "
+                "keeping all of them fully visible and unobstructed this time."
+            )
+            prompt = f"{prompt}{retry_reminder}"
             generated_image = await run_provider()
 
     response: dict[str, Any] = {
