@@ -4,12 +4,14 @@ class GenerateRoomRequest {
   final String style;
   final String color;
   final String imagePath;
+  final String provider;
 
   GenerateRoomRequest({
     required this.roomType,
     required this.style,
     required this.color,
     required this.imagePath,
+    required this.provider,
   });
 
   Map<String, dynamic> toJson() {
@@ -18,6 +20,7 @@ class GenerateRoomRequest {
       'style': style,
       'color': color,
       'image_path': imagePath,
+      'provider': provider,
     };
   }
 }

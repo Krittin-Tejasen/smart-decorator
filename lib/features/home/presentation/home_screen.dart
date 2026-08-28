@@ -11,6 +11,7 @@ import '../../../shared/models/design_style.dart';
 import '../../../shared/models/color_option.dart';
 import '../../../shared/models/room_type.dart';
 import '../../../shared/widgets/app_footer_nav.dart';
+import '../../../shared/widgets/ai_model_picker.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -158,25 +159,44 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               children: [
                 const SizedBox(height: 16),
 
-                ///////////////  App Title
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(
-                        text: 'Smart ',
-                        style: TextStyle(fontWeight: FontWeight.bold),
+                ///////////////  App Title + AI Model Picker
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: 'Smart ',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            TextSpan(
+                              text: 'Decorator',
+                              style: TextStyle(fontWeight: FontWeight.normal),
+                            ),
+                          ],
+                        ),
+                        style: TextStyle(
+                          fontSize: 34,
+                          height: 1.2,
+                          color: AppColors.ink,
+                        ),
                       ),
-                      TextSpan(
-                        text: 'Decorator',
-                        style: TextStyle(fontWeight: FontWeight.normal),
+                    ),
+                    const SizedBox(width: 10),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: AiModelPicker(
+                        selected: appState.selectedAiModel,
+                        onSelected: (model) {
+                          ref
+                              .read(appStateProvider.notifier)
+                              .selectAiModel(model);
+                        },
                       ),
-                    ],
-                  ),
-                  style: TextStyle(
-                    fontSize: 34,
-                    height: 1.2,
-                    color: AppColors.ink,
-                  ),
+                    ),
+                  ],
                 ),
 
                 const SizedBox(height: 6),

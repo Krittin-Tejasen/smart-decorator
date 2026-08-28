@@ -18,6 +18,7 @@ class AIGenerationService {
       'room_type': request.roomType,
       'style': request.style,
       'color': request.color,
+      'provider': request.provider,
       'image': await MultipartFile.fromFile(
         request.imagePath,
         filename: request.imagePath.split(RegExp(r'[\\/]')).last,

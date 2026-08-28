@@ -8,6 +8,7 @@ import '../models/room_type.dart';
 import '../models/product.dart';
 import '../models/design_history.dart';
 import '../models/generate_room_request.dart';
+import '../models/ai_model.dart';
 
 import '../../core/services/ai_generation_service.dart';
 
@@ -27,6 +28,8 @@ class AppState {
 
   final File? uploadedImage;
 
+  final AiModel selectedAiModel;
+
 
   AppState({
     this.selectedRoomType,
@@ -36,6 +39,7 @@ class AppState {
     this.matchedProducts = const [],
     this.history = const [],
     this.uploadedImage,
+    this.selectedAiModel = AiModel.mock,
   });
 
   AppState copyWith({
@@ -46,6 +50,7 @@ class AppState {
     String? generatedRoomImage,
     List<DesignHistory>? history,
     List<Product>? matchedProducts,
+    AiModel? selectedAiModel,
   }) {
     return AppState(
       selectedRoomType:
@@ -68,6 +73,9 @@ class AppState {
 
       uploadedImage:
           uploadedImage ?? this.uploadedImage,
+
+      selectedAiModel:
+          selectedAiModel ?? this.selectedAiModel,
     );
   }
 
@@ -108,12 +116,19 @@ class AppStateNotifier
       matchedProducts: state.matchedProducts,
       history: state.history,
       uploadedImage: state.uploadedImage,
+      selectedAiModel: state.selectedAiModel,
     );
   }
 
   void selectColorOption(ColorOption colorOption) {
     state = state.copyWith(
       selectedColorOption: colorOption,
+    );
+  }
+
+  void selectAiModel(AiModel model) {
+    state = state.copyWith(
+      selectedAiModel: model,
     );
   }
 
@@ -131,6 +146,7 @@ class AppStateNotifier
       generatedRoomImage: state.generatedRoomImage,
       matchedProducts: state.matchedProducts,
       history: state.history,
+      selectedAiModel: state.selectedAiModel,
     );
   }
 
@@ -171,6 +187,7 @@ class AppStateNotifier
       style: state.selectedStyle!.id,
       color: state.selectedColorOption!.id,
       imagePath: state.uploadedImage!.path,
+      provider: state.selectedAiModel.providerValue,
     );
 
     final aiService = AIGenerationService();
