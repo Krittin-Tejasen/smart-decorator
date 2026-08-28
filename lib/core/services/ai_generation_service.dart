@@ -18,7 +18,10 @@ class AIGenerationService {
       'room_type': request.roomType,
       'style': request.style,
       'color': request.color,
-      'provider': request.provider,
+      // Omitted entirely (not sent as a literal "null" string) when the
+      // user hasn't picked a specific model - the backend then falls back
+      // to its own AI_IMAGE_PROVIDER env setting.
+      if (request.provider != null) 'provider': request.provider,
       'image': await MultipartFile.fromFile(
         request.imagePath,
         filename: request.imagePath.split(RegExp(r'[\\/]')).last,

@@ -6,7 +6,14 @@
 /// (see backend/.env REPLICATE_MODEL) - the picker just gives it a
 /// friendlier name than the raw provider string.
 class AiModel {
-  final String providerValue;
+  /// null means "don't send a provider override - let the backend use
+  /// whatever AI_IMAGE_PROVIDER is set to in its own .env". This is the
+  /// picker's default specifically so that adding this picker doesn't
+  /// silently change the app's generation behavior for anyone who doesn't
+  /// touch it - before this picker existed, the backend's own env setting
+  /// was always what ran, and that has to stay true unless someone
+  /// deliberately picks a specific model.
+  final String? providerValue;
   final String title;
   final String subtitle;
 
@@ -15,6 +22,12 @@ class AiModel {
     required this.title,
     required this.subtitle,
   });
+
+  static const serverDefault = AiModel(
+    providerValue: null,
+    title: 'Server Default',
+    subtitle: 'Whatever the backend is currently configured to use',
+  );
 
   static const mock = AiModel(
     providerValue: 'mock',
@@ -34,5 +47,5 @@ class AiModel {
     subtitle: 'Faster & cheaper open-source model - ~1 THB/image',
   );
 
-  static const all = [mock, gemini, flux];
+  static const all = [serverDefault, mock, gemini, flux];
 }

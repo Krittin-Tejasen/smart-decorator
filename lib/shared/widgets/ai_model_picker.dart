@@ -138,8 +138,9 @@ class AiModelPicker extends StatelessWidget {
       case 'replicate':
         return Icons.bolt_rounded;
       case 'gemini':
-      default:
         return Icons.auto_awesome_rounded;
+      default:
+        return Icons.tune_rounded;
     }
   }
 

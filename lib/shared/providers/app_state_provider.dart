@@ -39,7 +39,7 @@ class AppState {
     this.matchedProducts = const [],
     this.history = const [],
     this.uploadedImage,
-    this.selectedAiModel = AiModel.mock,
+    this.selectedAiModel = AiModel.serverDefault,
   });
 
   AppState copyWith({
