@@ -31,9 +31,7 @@ router = APIRouter(tags=["generation"])
 
 # ── Style/color descriptions fed to the prompt-composition agent ──────────
 # Keep these in sync with the style/color ids the app sends
-# (lib/features/home/presentation/home_screen.dart). Room type, style, and
-# color together form a fixed, enumerable set (5 x 3 x 3 = 45 combinations),
-# so composed prompts are cached below instead of re-generated every request.
+# (lib/features/home/presentation/home_screen.dart).
 
 _STYLE_DESCRIPTIONS: dict[str, str] = {
     "japandi": (
@@ -64,12 +62,22 @@ _COLOR_DESCRIPTIONS: dict[str, str] = {
 }
 
 _COMPOSER_SYSTEM_PROMPT = """
-You are an interior-design prompt writer for an AI image generator.
-Given a room type, a design style, and an accent color description, write
-ONE vivid English paragraph (60-100 words) instructing the generator how to
-redecorate the room.
+You are an interior-design prompt writer for an AI image generator. You will
+be shown a photo of the actual room the user wants redecorated, along with
+the requested room type, design style, and accent color.
+
+Look at the photo first: note the room's shape, where the door(s) and
+window(s) are, the camera angle, and how much open floor space there is.
+Then write ONE vivid English paragraph (80-150 words) instructing the
+generator how to redecorate the room, choosing furniture and placement that
+suit THIS specific room's layout - not a generic showroom description.
 
 Rules:
+- Ground placement decisions in what you actually see in the photo (e.g.
+  only describe putting a piece "against the far wall" if the photo shows
+  that wall has room for it).
+- Favor a smaller number of well-placed pieces over an exhaustive shopping
+  list - do not force in more furniture than the space comfortably fits.
 - Use natural descriptive language only. Never use attention-weighting
   syntax such as (word:1.2) - the target model does not support it.
 - Mention concrete furniture, materials, and lighting appropriate to the
@@ -78,10 +86,6 @@ Rules:
   camera angle - those must be preserved as-is.
 - Output only the paragraph, no headings or extra commentary.
 """.strip()
-
-# room_type/style/color id combo -> composed prompt. Cleared only on process
-# restart; the combos are a fixed, small set so this stays warm in practice.
-_PROMPT_CACHE: dict[tuple[str, str, str], str] = {}
 
 # Hard structural constraints that must reach the image model on every
 # single request, regardless of whether the prompt-composition agent
@@ -109,22 +113,25 @@ def build_static_fallback_prompt(room_type: str, style: str, color: str) -> str:
     )
 
 
-async def compose_design_prompt(room_type: str, style: str, color: str) -> str:
-    """Prompt-composition agent: turns the short room/style/color ids into a
-    single descriptive, natural-language paragraph via a cheap text-only
-    Gemini call. Results are cached per id combo (see _PROMPT_CACHE) since
-    the option set is fixed and small - repeat requests for the same
-    combination cost nothing after the first.
+async def compose_design_prompt(
+    room_type: str, style: str, color: str, image_bytes: bytes, image_mime: str
+) -> str:
+    """Prompt-composition agent: turns the room/style/color ids into a single
+    descriptive, natural-language paragraph via a Gemini call that also sees
+    the actual room photo. Seeing the photo lets it ground furniture choice
+    and placement in the room's real shape/door/window layout instead of
+    describing a generic showroom scene that may not fit the space - a
+    static or photo-blind prompt can otherwise place furniture in ways that
+    look plausible in the abstract but awkward once matched against the
+    real room. Because the result now depends on the specific uploaded
+    photo (not just the id combo), it is no longer cached across requests
+    the way the old text-only version was.
     """
-    cache_key = (room_type, style, color)
-    if cache_key in _PROMPT_CACHE:
-        return _PROMPT_CACHE[cache_key]
-
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not configured on the backend.")
 
-    model = os.getenv("GEMINI_PROMPT_MODEL", "gemini-3.5-flash-lite")
+    model = os.getenv("GEMINI_PROMPT_MODEL", "gemini-3.6-flash")
     style_desc = _STYLE_DESCRIPTIONS.get(style, style)
     color_desc = _COLOR_DESCRIPTIONS.get(color, color)
 
@@ -137,8 +144,15 @@ async def compose_design_prompt(room_type: str, style: str, color: str) -> str:
                         "text": (
                             f"Room type: {room_type}\n"
                             f"Style: {style_desc}\n"
-                            f"Color: {color_desc}"
+                            f"Color: {color_desc}\n\n"
+                            "Here is the room photo:"
                         ),
+                    },
+                    {
+                        "inline_data": {
+                            "mime_type": image_mime,
+                            "data": base64.b64encode(image_bytes).decode("utf-8"),
+                        },
                     },
                 ],
             },
@@ -157,9 +171,7 @@ async def compose_design_prompt(room_type: str, style: str, color: str) -> str:
         response.raise_for_status()
         response_data = response.json()
 
-    text = response_data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    _PROMPT_CACHE[cache_key] = text
-    return text
+    return response_data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 def build_data_url(image_bytes: bytes, mime_type: str) -> str:
@@ -183,16 +195,21 @@ Check all of the following against the REDECORATED photo:
 1. It plausibly shows the same room type as intended.
 2. The decor plausibly matches the requested style/color intent.
 3. Every door, window, and visible electrical outlet/light switch that
-   appears in the ORIGINAL photo is still visible and NOT obstructed,
-   covered, or removed in the REDECORATED photo - new furniture or decor
-   must not block them.
+   appears in the ORIGINAL photo is still physically usable in the
+   REDECORATED photo - it does not need to be fully unobstructed, only
+   reachable and functional. FAIL this only when a large, solid piece of
+   furniture (a sofa, bed, cabinet, bookshelf, table, etc.) is placed
+   directly in front of or on top of it so it could not actually be used or
+   opened. Do NOT fail for a curtain, lamp, cord, rug, plant, or small decor
+   item merely appearing near or partially over it - those are cosmetic and
+   normal in real decorated rooms.
 4. The room's overall layout, walls, and camera angle still look like the
    same room, not a different one.
 
 Ignore minor imperfections - only fail on a clear, obvious violation (e.g. a
-window that disappeared, a door blocked by a sofa, an outlet painted over,
-the wrong room type, or a style/color that is clearly not what was asked
-for).
+window that disappeared, a door blocked by a sofa, an outlet or switch made
+physically unusable by furniture placed directly over it, the wrong room
+type, or a style/color that is clearly not what was asked for).
 
 Reply with exactly one line: either "PASS" or "FAIL: <short reason>".
 """.strip()
@@ -404,16 +421,27 @@ async def generate_with_replicate(prompt: str, image_bytes: bytes, mime_type: st
 
     try:
         async with httpx.AsyncClient(timeout=240) as client:
-            response = await client.post(
-                f"https://api.replicate.com/v1/models/{model}/predictions",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                    "Prefer": "wait=60",
-                },
-                json={"input": prediction_input},
-            )
-            response.raise_for_status()
+            # Replicate throttles harder once account credit drops below $5
+            # (429, e.g. "reduced to 6 requests per minute") - the response
+            # names how long to wait, and it's typically only ~1s, so a
+            # short bounded retry here is enough. A real user hitting this
+            # mid-request shouldn't see a hard failure over a 1-second wait.
+            for retry_n in range(4):
+                response = await client.post(
+                    f"https://api.replicate.com/v1/models/{model}/predictions",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                        "Prefer": "wait=60",
+                    },
+                    json={"input": prediction_input},
+                )
+                if response.status_code != 429 or retry_n == 3:
+                    response.raise_for_status()
+                    break
+                retry_after = float(response.json().get("retry_after", 1))
+                print(f"Replicate rate-limited (429), retrying in {retry_after}s...")
+                await asyncio.sleep(retry_after)
             prediction = response.json()
 
             for _ in range(36):
@@ -513,6 +541,7 @@ async def generate_room(
     color: str = Form(...),
     image: UploadFile = File(...),
     segment: bool = Form(False),
+    provider: str | None = Form(None),
 ):
     image_bytes = await image.read()
     mime_type = image.content_type or "image/png"
@@ -524,7 +553,9 @@ async def generate_room(
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.") from exc
 
     try:
-        style_paragraph = await compose_design_prompt(room_type, style, color)
+        style_paragraph = await compose_design_prompt(
+            room_type, style, color, image_bytes, mime_type
+        )
         # The composer only writes the style/furniture description - the hard
         # "don't cover the doors/windows/outlets" constraint always gets
         # appended here rather than trusted to the composer's output.
@@ -533,7 +564,9 @@ async def generate_room(
         print(f"compose_design_prompt failed, falling back to static prompt: {exc}")
         prompt = build_static_fallback_prompt(room_type, style, color)
 
-    provider = os.getenv("AI_IMAGE_PROVIDER", "gemini").lower()
+    # Client may pick a provider per-request (e.g. a model-selector UI);
+    # falls back to the server's env default when not specified.
+    provider = (provider or os.getenv("AI_IMAGE_PROVIDER", "gemini")).lower()
 
     async def run_provider() -> str:
         if provider == "mock":
