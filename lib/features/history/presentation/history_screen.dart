@@ -77,20 +77,22 @@ class _HistoryCard extends StatelessWidget {
     final key = item.roomType.toLowerCase();
     if (key.contains('bed')) return Icons.bed_rounded;
     if (key.contains('dining') || key.contains('table')) return Icons.table_restaurant_rounded;
+    if (key.contains('kitchen')) return Icons.kitchen_rounded;
+    if (key.contains('office')) return Icons.work_rounded;
     return Icons.weekend_rounded;
   }
 
   Color get _tileColor {
-    final key = item.theme.toLowerCase();
+    final key = item.style.toLowerCase();
     if (key.contains('luxury')) return const Color(0xFFEFE1C9);
-    if (key.contains('minimal')) return AppColors.sandTint;
+    if (key.contains('industrial') || key.contains('loft')) return AppColors.lightCard;
     return AppColors.sageTint;
   }
 
   Color get _tileIconColor {
-    final key = item.theme.toLowerCase();
+    final key = item.style.toLowerCase();
     if (key.contains('luxury')) return AppColors.brassDeep;
-    if (key.contains('minimal')) return const Color(0xFF8A7350);
+    if (key.contains('industrial') || key.contains('loft')) return AppColors.ink;
     return AppColors.sageDeep;
   }
 
@@ -146,7 +148,7 @@ class _HistoryCard extends StatelessWidget {
                   runSpacing: 6,
                   children: [
                     _Chip(
-                      label: 'Theme: ${item.theme}',
+                      label: 'Style: ${item.style}',
                       bg: _tileColor,
                       fg: _tileIconColor,
                     ),

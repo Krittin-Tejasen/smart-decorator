@@ -7,35 +7,42 @@ import 'package:image_picker/image_picker.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/widgets/app_icons.dart';
 import '../../../shared/providers/app_state_provider.dart';
-import '../../../shared/models/design_theme.dart';
+import '../../../shared/models/design_style.dart';
+import '../../../shared/models/color_option.dart';
 import '../../../shared/models/room_type.dart';
 import '../../../shared/widgets/app_footer_nav.dart';
+import '../../../shared/widgets/ai_model_picker.dart';
 
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
-  Future<void> pickImage(
-    WidgetRef ref,
-  ) async {
+  @override
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  final ScrollController _roomTypeScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _roomTypeScrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> pickImage(WidgetRef ref) async {
     final picker = ImagePicker();
 
-    final pickedFile =
-      await picker.pickImage(
-        source: ImageSource.gallery,
-      );
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
       ref
-        .read(appStateProvider.notifier)
-        .setUploadedImage(
-          File(pickedFile.path),
-        );
+          .read(appStateProvider.notifier)
+          .setUploadedImage(File(pickedFile.path));
     }
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-
-    // Sample Room Types
+  Widget build(BuildContext context) {
+    // Room Types the app supports
     final roomTypes = [
       RoomType(
         id: 'living_room',
@@ -43,41 +50,98 @@ class HomeScreen extends ConsumerWidget {
         icon: Icons.weekend_rounded,
       ),
 
-      RoomType(
-        id: 'bedroom',
-        title: 'Bedroom',
-        icon: Icons.bed_rounded,
-      ),
+      RoomType(id: 'bedroom', title: 'Bedroom', icon: Icons.bed_rounded),
 
       RoomType(
         id: 'dining_room',
         title: 'Dining Room',
         icon: Icons.table_restaurant_rounded,
       ),
+
+      RoomType(id: 'kitchen', title: 'Kitchen', icon: Icons.kitchen_rounded),
+
+      RoomType(
+        id: 'home_office',
+        title: 'Home Office',
+        icon: Icons.work_rounded,
+      ),
     ];
 
-    // Sample Theme Colors
-    final themes = [
-      DesignTheme(
-        id: 'minimal',
-        title: 'Minimal',
-        color: AppColors.sand,
+    // Design Styles, each with its own fixed set of accent-color palettes
+    final styles = [
+      DesignStyle(
+        id: 'japandi',
+        title: 'Japandi',
+        subtitle: 'Warm Minimalist',
+        colorOptions: [
+          ColorOption(
+            id: 'warm_oat_cream',
+            title: 'Warm Oat & Cream',
+            colors: const [Color(0xFFE8DCC8), Color(0xFFF7F2E9)],
+          ),
+          ColorOption(
+            id: 'muted_sage_green',
+            title: 'Muted Sage Green',
+            colors: const [Color(0xFFA7B29A), Color(0xFF7E8B76)],
+          ),
+          ColorOption(
+            id: 'soft_terracotta',
+            title: 'Soft Terracotta',
+            colors: const [Color(0xFFE0977C), Color(0xFFEFC3A8)],
+          ),
+        ],
       ),
 
-      DesignTheme(
-        id: 'modern',
-        title: 'Modern',
-        color: AppColors.sage,
+      DesignStyle(
+        id: 'industrial_loft',
+        title: 'Industrial / Loft',
+        subtitle: 'Raw & Edgy',
+        colorOptions: [
+          ColorOption(
+            id: 'raw_concrete_matte_black',
+            title: 'Raw Concrete & Matte Black',
+            colors: const [Color(0xFF9C9C97), Color(0xFF2A2A2A)],
+          ),
+          ColorOption(
+            id: 'rusty_brick_leather',
+            title: 'Rusty Brick & Leather',
+            colors: const [Color(0xFFA35A3A), Color(0xFF5A3825)],
+          ),
+          ColorOption(
+            id: 'dark_navy_blue',
+            title: 'Dark Navy Blue',
+            colors: const [Color(0xFF1E2A4A), Color(0xFF10182C)],
+          ),
+        ],
       ),
 
-      DesignTheme(
-        id: 'luxury',
-        title: 'Luxury',
-        color: AppColors.brassDeep,
+      DesignStyle(
+        id: 'modern_luxury',
+        title: 'Modern Luxury',
+        subtitle: 'Sleek & Upscale',
+        colorOptions: [
+          ColorOption(
+            id: 'ivory_champagne_gold',
+            title: 'Ivory & Champagne Gold',
+            colors: const [Color(0xFFF6F1E4), Color(0xFFD8B47E)],
+          ),
+          ColorOption(
+            id: 'emerald_green_brass',
+            title: 'Emerald Green & Brass',
+            colors: const [Color(0xFF0E6E4E), Color(0xFFB68A4E)],
+          ),
+          ColorOption(
+            id: 'midnight_blue_silver',
+            title: 'Midnight Blue & Silver',
+            colors: const [Color(0xFF0C1E3E), Color(0xFFC3C6CC)],
+          ),
+        ],
       ),
     ];
 
     final appState = ref.watch(appStateProvider);
+
+    final selectedStyle = appState.selectedStyle;
 
     final canGenerate = appState.canGenerateDesign;
 
@@ -93,28 +157,46 @@ class HomeScreen extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
 
               children: [
-
                 const SizedBox(height: 16),
 
-                ///////////////  App Title
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(
-                        text: 'Smart ',
-                        style: TextStyle(fontWeight: FontWeight.bold),
+                ///////////////  App Title + AI Model Picker
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: 'Smart ',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            TextSpan(
+                              text: 'Decorator',
+                              style: TextStyle(fontWeight: FontWeight.normal),
+                            ),
+                          ],
+                        ),
+                        style: TextStyle(
+                          fontSize: 34,
+                          height: 1.2,
+                          color: AppColors.ink,
+                        ),
                       ),
-                      TextSpan(
-                        text: 'Decorator',
-                        style: TextStyle(fontWeight: FontWeight.normal),
+                    ),
+                    const SizedBox(width: 10),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: AiModelPicker(
+                        selected: appState.selectedAiModel,
+                        onSelected: (model) {
+                          ref
+                              .read(appStateProvider.notifier)
+                              .selectAiModel(model);
+                        },
                       ),
-                    ],
-                  ),
-                  style: TextStyle(
-                    fontSize: 34,
-                    height: 1.2,
-                    color: AppColors.ink,
-                  ),
+                    ),
+                  ],
                 ),
 
                 const SizedBox(height: 6),
@@ -136,25 +218,35 @@ class HomeScreen extends ConsumerWidget {
 
                 const SizedBox(height: 12),
 
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                SizedBox(
+                  height: 112,
+                  child: Scrollbar(
+                    controller: _roomTypeScrollController,
+                    thumbVisibility: true,
+                    trackVisibility: false,
+                    thickness: 4,
+                    radius: const Radius.circular(4),
+                    child: ListView.separated(
+                      controller: _roomTypeScrollController,
+                      padding: const EdgeInsets.only(bottom: 14),
+                      scrollDirection: Axis.horizontal,
+                      itemCount: roomTypes.length,
+                      separatorBuilder: (context, _) =>
+                          const SizedBox(width: 10),
+                      itemBuilder: (context, index) {
+                        final room = roomTypes[index];
+                        final selected =
+                            appState.selectedRoomType?.id == room.id;
 
-                  children: roomTypes.map((room) {
-                    final selected = appState.selectedRoomType?.id == room.id;
-
-                    return Expanded(
-                      child: Padding(
-                        padding: EdgeInsets.only(
-                          right: room == roomTypes.last ? 0 : 10,
-                        ),
-                        child: GestureDetector(
+                        return GestureDetector(
                           onTap: () {
                             ref
-                              .read(appStateProvider.notifier)
-                              .selectRoomType(room);
+                                .read(appStateProvider.notifier)
+                                .selectRoomType(room);
                           },
 
                           child: AnimatedContainer(
+                            width: 84,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             duration: const Duration(milliseconds: 180),
 
@@ -165,7 +257,9 @@ class HomeScreen extends ConsumerWidget {
                               boxShadow: selected
                                   ? [
                                       BoxShadow(
-                                        color: AppColors.ink.withValues(alpha: 0.08),
+                                        color: AppColors.ink.withValues(
+                                          alpha: 0.08,
+                                        ),
                                         blurRadius: 14,
                                         offset: const Offset(0, 6),
                                       ),
@@ -173,7 +267,105 @@ class HomeScreen extends ConsumerWidget {
                                   : [],
 
                               border: Border.all(
-                                color: selected ? AppColors.sage : Colors.transparent,
+                                color: selected
+                                    ? AppColors.sage
+                                    : Colors.transparent,
+                                width: 1.5,
+                              ),
+                            ),
+
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: selected
+                                        ? AppColors.sageTint
+                                        : AppColors.sandTint,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Icon(
+                                    room.icon,
+                                    size: 20,
+                                    color: selected
+                                        ? AppColors.sageDeep
+                                        : AppColors.brassDeep,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  room.title,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: selected
+                                        ? AppColors.ink
+                                        : AppColors.muted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 26),
+
+                ///////////////  Design Style Options
+                const _SectionLabel('Choose a Style'),
+
+                const SizedBox(height: 12),
+
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: styles.map((style) {
+                    final selected = selectedStyle?.id == style.id;
+
+                    return Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          right: style == styles.last ? 0 : 10,
+                        ),
+                        child: GestureDetector(
+                          onTap: () {
+                            ref
+                                .read(appStateProvider.notifier)
+                                .selectStyle(style);
+                          },
+
+                          child: AnimatedContainer(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 14,
+                              horizontal: 6,
+                            ),
+                            duration: const Duration(milliseconds: 180),
+
+                            decoration: BoxDecoration(
+                              color: AppColors.surface,
+                              borderRadius: BorderRadius.circular(16),
+
+                              boxShadow: selected
+                                  ? [
+                                      BoxShadow(
+                                        color: AppColors.ink.withValues(
+                                          alpha: 0.08,
+                                        ),
+                                        blurRadius: 14,
+                                        offset: const Offset(0, 6),
+                                      ),
+                                    ]
+                                  : [],
+
+                              border: Border.all(
+                                color: selected
+                                    ? AppColors.sage
+                                    : Colors.transparent,
                                 width: 1.5,
                               ),
                             ),
@@ -184,23 +376,38 @@ class HomeScreen extends ConsumerWidget {
                                   width: 40,
                                   height: 40,
                                   decoration: BoxDecoration(
-                                    color: selected ? AppColors.sageTint : AppColors.sandTint,
+                                    color: selected
+                                        ? AppColors.sageTint
+                                        : AppColors.sandTint,
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: Icon(
-                                    room.icon,
+                                    _styleIcon(style.id),
                                     size: 20,
-                                    color: selected ? AppColors.sageDeep : AppColors.brassDeep,
+                                    color: selected
+                                        ? AppColors.sageDeep
+                                        : AppColors.brassDeep,
                                   ),
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  room.title,
+                                  style.title,
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     fontSize: 11,
                                     fontWeight: FontWeight.w600,
-                                    color: selected ? AppColors.ink : AppColors.muted,
+                                    color: selected
+                                        ? AppColors.ink
+                                        : AppColors.muted,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  style.subtitle,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 9.5,
+                                    color: AppColors.muted,
                                   ),
                                 ),
                               ],
@@ -214,64 +421,83 @@ class HomeScreen extends ConsumerWidget {
 
                 const SizedBox(height: 26),
 
-                ///////////////  Theme Color Options
-                const _SectionLabel('Choose Theme'),
+                ///////////////  Color Options (depend on the selected style)
+                const _SectionLabel('Choose a Color'),
 
                 const SizedBox(height: 12),
 
-                Row(
-                  children: themes.map((theme) {
-                    final selected = appState.selectedTheme?.id == theme.id;
+                if (selectedStyle == null)
+                  Text(
+                    'Pick a style above to see its color options',
+                    style: TextStyle(fontSize: 12.5, color: AppColors.muted),
+                  )
+                else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: selectedStyle.colorOptions.map((colorOption) {
+                      final selected =
+                          appState.selectedColorOption?.id == colorOption.id;
 
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 16),
-                      child: GestureDetector(
-                        onTap: () {
-                          ref
-                            .read(appStateProvider.notifier)
-                            .selectTheme(theme);
-                        },
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 16),
+                        child: GestureDetector(
+                          onTap: () {
+                            ref
+                                .read(appStateProvider.notifier)
+                                .selectColorOption(colorOption);
+                          },
 
-                        child: Column(
-                          children: [
-                            AnimatedContainer(
-                              duration: const Duration(milliseconds: 180),
-                              width: 46,
-                              height: 46,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [
-                                    theme.color,
-                                    Color.lerp(theme.color, Colors.black, 0.18)!,
-                                  ],
+                          child: Column(
+                            children: [
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 180),
+                                width: 46,
+                                height: 46,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: colorOption.colors,
+                                  ),
+                                  border: Border.all(
+                                    color: selected
+                                        ? AppColors.sage
+                                        : Colors.transparent,
+                                    width: 2.5,
+                                  ),
                                 ),
-                                border: Border.all(
-                                  color: selected ? AppColors.sage : Colors.transparent,
-                                  width: 2.5,
+                                child: selected
+                                    ? Icon(
+                                        Icons.check_rounded,
+                                        color: _iconColorFor(
+                                          colorOption.colors.first,
+                                        ),
+                                        size: 20,
+                                      )
+                                    : null,
+                              ),
+                              const SizedBox(height: 6),
+                              SizedBox(
+                                width: 72,
+                                child: Text(
+                                  colorOption.title,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w500,
+                                    color: selected
+                                        ? AppColors.ink
+                                        : AppColors.muted,
+                                  ),
                                 ),
                               ),
-                              child: selected
-                                  ? const Icon(Icons.check_rounded, color: Colors.white, size: 20)
-                                  : null,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              theme.title,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color: selected ? AppColors.ink : AppColors.muted,
-                              ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    );
-                  }).toList(),
-                ),
+                      );
+                    }).toList(),
+                  ),
 
                 const SizedBox(height: 26),
 
@@ -439,7 +665,10 @@ class HomeScreen extends ConsumerWidget {
 
                           const SizedBox(width: 12),
 
-                          LidarScanGraphic(size: 64, bracketColor: AppColors.brass),
+                          LidarScanGraphic(
+                            size: 64,
+                            bracketColor: AppColors.brass,
+                          ),
                         ],
                       ),
                     ),
@@ -455,8 +684,7 @@ class HomeScreen extends ConsumerWidget {
 
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor:
-                        canGenerate
+                      backgroundColor: canGenerate
                           ? AppColors.brass
                           : AppColors.brass.withValues(alpha: 0.45),
                       foregroundColor: AppColors.ink,
@@ -467,12 +695,12 @@ class HomeScreen extends ConsumerWidget {
                     ),
 
                     onPressed: canGenerate
-                      ? () {
-                        debugPrint('Generate Design Tapped');
-                        context.go('/processing');
-                        // context.go('/test');
-                      }
-                      : null,
+                        ? () {
+                            debugPrint('Generate Design Tapped');
+                            context.go('/processing');
+                            // context.go('/test');
+                          }
+                        : null,
 
                     child: const Text(
                       'Generate Design',
@@ -484,19 +712,16 @@ class HomeScreen extends ConsumerWidget {
                   ),
                 ),
 
-                if(!canGenerate) ...[
+                if (!canGenerate) ...[
                   const SizedBox(height: 10),
 
                   const Center(
                     child: Text(
-                      'Please select room type, theme, and uplaod your room image',
+                      'Please select room type, style, color, and uplaod your room image',
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.muted,
-                      ),
-                    )
-                  )
+                      style: TextStyle(fontSize: 12, color: AppColors.muted),
+                    ),
+                  ),
                 ],
                 const SizedBox(height: 36),
               ],
@@ -508,6 +733,24 @@ class HomeScreen extends ConsumerWidget {
       bottomNavigationBar: const AppFooterNav(current: FooterTab.home),
     );
   }
+}
+
+IconData _styleIcon(String styleId) {
+  switch (styleId) {
+    case 'industrial_loft':
+      return Icons.factory_rounded;
+    case 'modern_luxury':
+      return Icons.diamond_rounded;
+    case 'japandi':
+    default:
+      return Icons.spa_rounded;
+  }
+}
+
+/// Picks a legible checkmark color against a swatch's first color, since
+/// the color options range from very light (ivory) to very dark (navy).
+Color _iconColorFor(Color background) {
+  return background.computeLuminance() > 0.55 ? AppColors.ink : Colors.white;
 }
 
 class _SectionLabel extends StatelessWidget {
