@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -21,7 +20,7 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
   // ── Compute room dimensions from XZ floor-plan points ──────────────────
 
   _RoomDimensions _computeDimensions(List<Offset> pts) {
-    if (pts.length < 2) return _RoomDimensions(0, 0, 0);
+    if (pts.length < 2) return _RoomDimensions(0, 0, 0, 0);
 
     double minX = pts.first.dx, maxX = pts.first.dx;
     double minZ = pts.first.dy, maxZ = pts.first.dy;
@@ -32,13 +31,6 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
       if (p.dy > maxZ) maxZ = p.dy;
     }
 
-    // Perimeter
-    double perimeter = 0;
-    for (int i = 0; i < pts.length; i++) {
-      final a = pts[i], b = pts[(i + 1) % pts.length];
-      perimeter += sqrt(pow(b.dx - a.dx, 2) + pow(b.dy - a.dy, 2));
-    }
-
     // Shoelace area
     double area = 0;
     for (int i = 0; i < pts.length; i++) {
@@ -47,10 +39,18 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     }
     area = area.abs() / 2;
 
+    // Height from ceiling/floor Y samples passed in via widget.data
+    final ceilingY = (widget.data['ceilingY'] as num?)?.toDouble();
+    final floorY   = (widget.data['floorY']   as num?)?.toDouble();
+    final height   = (ceilingY != null && floorY != null)
+        ? (ceilingY - floorY).abs()
+        : 0.0;
+
     return _RoomDimensions(
       (maxX - minX).abs(),
       (maxZ - minZ).abs(),
       area,
+      height,
     );
   }
 
@@ -63,11 +63,20 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
         [];
     final snapshot = widget.data['snapshot'] as Map<String, dynamic>?;
 
+    final ceilingY = widget.data['ceilingY'];
+    final floorY   = widget.data['floorY'];
+    final height   = (ceilingY != null && floorY != null)
+        ? ((ceilingY as num) - (floorY as num)).abs()
+        : null;
+
     final saveData = {
       'savedAt': DateTime.now().toIso8601String(),
       'cornerCount': widget.data['cornerCount'],
       'captureMode': snapshot?['captureMode'] ?? 'standard',
       'floorPlanPoints': points,
+      'ceilingY': ceilingY,
+      'floorY': floorY,
+      'heightMeters': height,
       'hasDepthMap': snapshot?['depthMapPng'] != null,
       'hasMeshAnchors': (snapshot?['meshAnchors'] as List?)?.isNotEmpty == true,
       'snapshot': snapshot,
@@ -162,9 +171,13 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
             Row(
               children: [
                 Expanded(child: _DimCard('Width', _fmt(dims.width), Icons.swap_horiz)),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 Expanded(child: _DimCard('Depth', _fmt(dims.depth), Icons.swap_vert)),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
+                Expanded(child: _DimCard('Height',
+                    dims.height > 0 ? _fmt(dims.height) : '—',
+                    Icons.height_rounded)),
+                const SizedBox(width: 8),
                 Expanded(child: _DimCard('Area', '${dims.area.toStringAsFixed(1)} m²', Icons.square_foot)),
               ],
             ),
@@ -296,8 +309,8 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
 // ── Small helpers ─────────────────────────────────────────────────────────────
 
 class _RoomDimensions {
-  final double width, depth, area;
-  _RoomDimensions(this.width, this.depth, this.area);
+  final double width, depth, area, height;
+  _RoomDimensions(this.width, this.depth, this.area, this.height);
 }
 
 class _SectionTitle extends StatelessWidget {

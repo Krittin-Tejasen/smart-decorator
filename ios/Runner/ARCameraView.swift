@@ -45,6 +45,7 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
             case "addPoint":       self.handleAddPoint(result: result)
             case "clearPoints":    self.clearAll(); result(nil)
             case "captureSnapshot":self.handleCaptureSnapshot(result: result)
+            case "samplePoint":    self.handleSamplePoint(result: result)
             case "getCapabilities":result(ARCapabilityService.toFlutterMap())
             default:               result(FlutterMethodNotImplemented)
             }
@@ -105,6 +106,33 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
             ? simd_length(points.last! - points[points.count - 2]) : 0
         let allPts = points.map { ["x": Double($0.x), "y": Double($0.y), "z": Double($0.z)] }
         result(["points": points.count, "distance": Double(dist), "allPoints": allPts])
+    }
+
+    // MARK: - Sample single 3-D point (no marker, used for ceiling height)
+
+    private func handleSamplePoint(result: FlutterResult) {
+        guard let frame = arView.session.currentFrame else {
+            result(FlutterError(code: "NO_FRAME", message: "No current AR frame", details: nil))
+            return
+        }
+        let centre = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+        let position: simd_float3
+
+        if ARCapabilityService.hasLiDAR,
+           #available(iOS 14.0, *),
+           let depth = frame.smoothedSceneDepth ?? frame.sceneDepth {
+            position = depthSamplePoint(frame: frame, depth: depth, screenPt: centre)
+        } else if let query = arView.raycastQuery(from: centre, allowing: .estimatedPlane,
+                                                  alignment: .any),
+                  let hit = arView.session.raycast(query).first {
+            let c = hit.worldTransform.columns.3
+            position = simd_make_float3(c.x, c.y, c.z)
+        } else {
+            result(FlutterError(code: "NO_HIT", message: "Could not sample depth", details: nil))
+            return
+        }
+
+        result(["x": Double(position.x), "y": Double(position.y), "z": Double(position.z)])
     }
 
     // MARK: - Capture snapshot
