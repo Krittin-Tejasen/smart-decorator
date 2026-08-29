@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 import '../widgets/scan_widgets.dart';
 
 class LidarView extends StatefulWidget {
@@ -14,6 +15,7 @@ class _LidarViewState extends State<LidarView> {
   int _cornerCount = 0;
   double _lastDistance = 0;
   List<Offset> _floorPlanPoints = [];
+  bool _isSaving = false;
 
   void _onPlatformViewCreated(int viewId) {
     _channel = MethodChannel('com.smartdeco.app/ar_camera_$viewId');
@@ -31,7 +33,6 @@ class _LidarViewState extends State<LidarView> {
         if (rawPoints != null) {
           _floorPlanPoints = rawPoints.map((p) {
             final m = Map<String, dynamic>.from(p as Map);
-            // Project ARKit world space onto XZ plane (top-down view)
             return Offset(
               (m['x'] as num).toDouble(),
               (m['z'] as num).toDouble(),
@@ -53,6 +54,32 @@ class _LidarViewState extends State<LidarView> {
     });
   }
 
+  Future<void> _onDone() async {
+    if (_channel == null || _cornerCount < 3) return;
+    setState(() => _isSaving = true);
+
+    Map<String, dynamic>? snapshot;
+    try {
+      final raw = await _channel!.invokeMethod<Map>('captureSnapshot');
+      if (raw != null) {
+        snapshot = Map<String, dynamic>.from(raw);
+      }
+    } on PlatformException catch (e) {
+      debugPrint('captureSnapshot error: ${e.message}');
+    }
+
+    if (!mounted) return;
+    setState(() => _isSaving = false);
+
+    context.push('/scan_result', extra: {
+      'floorPlanPoints': _floorPlanPoints
+          .map((o) => {'x': o.dx, 'y': o.dy})
+          .toList(),
+      'snapshot': snapshot,
+      'cornerCount': _cornerCount,
+    });
+  }
+
   String _fmtDistance(double m) {
     if (m < 0.01) return '—';
     if (m >= 1.0) return '${m.toStringAsFixed(2)} m';
@@ -63,7 +90,6 @@ class _LidarViewState extends State<LidarView> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // Full-screen ARKit view
         Positioned.fill(
           child: UiKitView(
             viewType: 'ar_camera_view',
@@ -72,7 +98,6 @@ class _LidarViewState extends State<LidarView> {
           ),
         ),
 
-        // Top instruction bar
         Positioned(
           top: 0, left: 0, right: 0,
           child: Container(
@@ -91,10 +116,8 @@ class _LidarViewState extends State<LidarView> {
           ),
         ),
 
-        // Center crosshair
         const Center(child: ScanCrosshair()),
 
-        // Distance label (bottom-left)
         if (_lastDistance > 0.01)
           Positioned(
             bottom: 104, left: 16,
@@ -108,42 +131,42 @@ class _LidarViewState extends State<LidarView> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('Last segment', style: TextStyle(color: Colors.white60, fontSize: 11)),
+                  const Text('Last segment',
+                      style: TextStyle(color: Colors.white60, fontSize: 11)),
                   Text(
                     _fmtDistance(_lastDistance),
-                    style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
             ),
           ),
 
-        // Mini floor plan (bottom-right)
         Positioned(
           bottom: 104, right: 16,
           child: FloorPlanMini(points: _floorPlanPoints),
         ),
 
-        // Bottom control bar
         Positioned(
           bottom: 0, left: 0, right: 0,
           child: Container(
             color: Colors.black87,
             padding: EdgeInsets.fromLTRB(
-              24, 16, 24,
-              16 + MediaQuery.of(context).padding.bottom,
-            ),
+                24, 16, 24, 16 + MediaQuery.of(context).padding.bottom),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Reset
                 TextButton.icon(
                   onPressed: _cornerCount > 0 ? _clearPoints : null,
-                  icon: const Icon(Icons.refresh_rounded, color: Colors.white60, size: 20),
-                  label: const Text('Reset', style: TextStyle(color: Colors.white60)),
+                  icon: const Icon(Icons.refresh_rounded,
+                      color: Colors.white60, size: 20),
+                  label: const Text('Reset',
+                      style: TextStyle(color: Colors.white60)),
                 ),
 
-                // Add Corner — yellow circle button
                 GestureDetector(
                   onTap: _addCorner,
                   child: Container(
@@ -152,23 +175,34 @@ class _LidarViewState extends State<LidarView> {
                       color: Colors.yellow,
                       shape: BoxShape.circle,
                       boxShadow: [
-                        BoxShadow(color: Colors.yellow.withValues(alpha: 0.45), blurRadius: 18, spreadRadius: 2),
+                        BoxShadow(
+                            color: Colors.yellow.withValues(alpha: 0.45),
+                            blurRadius: 18,
+                            spreadRadius: 2),
                       ],
                     ),
-                    child: const Icon(Icons.add_rounded, color: Colors.black, size: 38),
+                    child: const Icon(Icons.add_rounded,
+                        color: Colors.black, size: 38),
                   ),
                 ),
 
-                // Done
                 TextButton.icon(
-                  onPressed: _cornerCount >= 3
-                      ? () => Navigator.of(context).pop(_floorPlanPoints)
-                      : null,
-                  icon: Icon(Icons.check_rounded,
-                      color: _cornerCount >= 3 ? Colors.greenAccent : Colors.white30, size: 20),
+                  onPressed: (_cornerCount >= 3 && !_isSaving) ? _onDone : null,
+                  icon: _isSaving
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.greenAccent))
+                      : Icon(Icons.check_rounded,
+                          color: _cornerCount >= 3
+                              ? Colors.greenAccent
+                              : Colors.white30,
+                          size: 20),
                   label: Text('Done',
                       style: TextStyle(
-                          color: _cornerCount >= 3 ? Colors.greenAccent : Colors.white30)),
+                          color: _cornerCount >= 3
+                              ? Colors.greenAccent
+                              : Colors.white30)),
                 ),
               ],
             ),
