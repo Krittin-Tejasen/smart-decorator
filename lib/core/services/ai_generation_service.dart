@@ -16,7 +16,12 @@ class AIGenerationService {
   ) async {
     final formData = FormData.fromMap({
       'room_type': request.roomType,
-      'theme': request.theme,
+      'style': request.style,
+      'color': request.color,
+      // Omitted entirely (not sent as a literal "null" string) when the
+      // user hasn't picked a specific model - the backend then falls back
+      // to its own AI_IMAGE_PROVIDER env setting.
+      if (request.provider != null) 'provider': request.provider,
       'image': await MultipartFile.fromFile(
         request.imagePath,
         filename: request.imagePath.split(RegExp(r'[\\/]')).last,
