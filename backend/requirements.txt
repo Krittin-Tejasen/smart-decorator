@@ -13,3 +13,12 @@ python-dotenv
 httpx
 
 pydantic
+
+# Local furniture segmentation (Grounding DINO + SAM 2) — see the Furniture
+# Segmentation section of the README for setup, incl. downloading a SAM 2
+# checkpoint. On a CPU-only machine, install torch/torchvision from
+# https://download.pytorch.org/whl/cpu first for a much smaller download.
+torch
+torchvision
+transformers
+sam2
