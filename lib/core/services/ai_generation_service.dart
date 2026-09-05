@@ -22,6 +22,7 @@ class AIGenerationService {
       // user hasn't picked a specific model - the backend then falls back
       // to its own AI_IMAGE_PROVIDER env setting.
       if (request.provider != null) 'provider': request.provider,
+      'segment': 'true',
       'image': await MultipartFile.fromFile(
         request.imagePath,
         filename: request.imagePath.split(RegExp(r'[\\/]')).last,

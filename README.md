@@ -24,7 +24,7 @@ A Flutter application that helps users visualize and design their room by scanni
 | Animations | flutter_animate |
 | Backend | FastAPI (Python) |
 | Image Generation | Gemini / Replicate (nano-banana) |
-| Furniture Segmentation | Grounded SAM 2 (Replicate) with Gemini Vision fallback |
+| Furniture Segmentation | Grounding DINO + SAM 2 (local, PyTorch/Transformers) with Gemini Vision fallback |
 
 ## Project Structure
 
@@ -55,7 +55,7 @@ lib/
 
 backend/
 ├── main.py                    # FastAPI app — /generate-room, mounts segmentation router
-├── segmentation.py            # /segment-furniture — Grounded SAM 2 / Gemini Vision detection
+├── segmentation.py            # /segment-furniture — local Grounding DINO + SAM 2 / Gemini Vision detection
 ├── test_segmentation.py       # CLI script to test /segment-furniture against local images
 └── requirements.txt           # Python dependencies
 
@@ -101,17 +101,26 @@ furniture/decor items and returns each one with a labelled bounding box, a cropp
 image, a per-item segmentation mask, dominant colours, and shape features — ready for
 downstream product matching.
 
-Pipeline (when `REPLICATE_API_TOKEN` is set):
+Pipeline — both models run locally, in-process, on whatever machine hosts this backend:
 
 ```
 Generated image → Grounding DINO → 2D bounding boxes → SAM 2 → one mask per furniture item
 ```
 
-- **Grounding DINO** — open-vocabulary text-prompted detection, produces a labelled box per item.
-- **SAM 2** — takes those boxes as prompts and returns one precise pixel mask per box.
-- **Gemini Vision** — fallback used when Replicate isn't configured, or if either
-  Replicate stage fails. It only produces boxes, so its masks are a rectangular
-  approximation of the box (`mask_precise: false` on the returned item).
+- **Grounding DINO** — open-vocabulary text-prompted detection (`transformers`'
+  `AutoModelForZeroShotObjectDetection`, model `IDEA-Research/grounding-dino-tiny` by
+  default), produces a labelled box per item. Weights auto-download from the Hugging
+  Face Hub on first use.
+- **SAM 2** — takes those boxes as prompts (`sam2`'s `SAM2ImagePredictor`) and returns
+  one precise pixel mask per box. Requires a checkpoint downloaded manually (see below).
+- **Gemini Vision** — fallback used if the local dependencies/checkpoint aren't set up
+  yet, or if either local stage fails at runtime. It only produces boxes, so its masks
+  are a rectangular approximation of the box (`mask_precise: false` on the returned item).
+
+Because inference happens entirely on the backend, the phone/client's hardware doesn't
+matter — it only uploads a photo and downloads the JSON result. Speed depends solely on
+whatever machine is running `uvicorn`: a CUDA GPU there is fast, CPU-only works but is
+much slower (device is auto-detected, override with `SEGMENTATION_DEVICE`).
 
 Each result is returned in the HTTP response **and** written to disk as JSON under
 `backend/segmentation_results/` for reuse without re-running detection.
@@ -128,15 +137,32 @@ The Flutter-side UI for displaying segmentation results (`segmentation_screen.da
 cd backend
 python -m venv .venv
 ./.venv/Scripts/activate        # Windows; use `source .venv/bin/activate` on macOS/Linux
+
+# On a CPU-only machine, install the smaller CPU-only PyTorch wheel first:
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 pip install -r requirements.txt
 ```
 
-Create `backend/.env` with at least one provider key:
+Create `backend/.env` (or `backend/backend.env` — both are loaded) with at least one
+provider key:
 
 ```
-GEMINI_API_KEY=your-gemini-key
-REPLICATE_API_TOKEN=your-replicate-token   # optional, enables Grounding DINO + SAM 2
+GEMINI_API_KEY=your-gemini-key   # used for /generate-room and as the segmentation fallback
 ```
+
+Download a SAM 2.1 checkpoint (the "small" variant is a good CPU/GPU tradeoff, ~180MB
+— use `sam2.1_hiera_tiny.pt` for an even lighter/faster option, or `..._large.pt` for
+best quality on a GPU):
+
+```bash
+mkdir -p checkpoints
+curl -L -o checkpoints/sam2.1_hiera_small.pt \
+  https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt
+```
+
+If you use a different checkpoint size, point `SAM2_MODEL_CFG` at the matching config
+(e.g. `configs/sam2.1/sam2.1_hiera_t.yaml` for the tiny checkpoint).
 
 Run the server:
 

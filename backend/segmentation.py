@@ -6,19 +6,22 @@ POST /segment-furniture
   a labelled bounding box, a cropped image, a per-item segmentation mask,
   dominant colours, and shape features — ready for downstream product matching.
 
-Pipeline (when REPLICATE_API_TOKEN is configured):
+Pipeline (runs locally, no external API — when torch/transformers/sam2 + a
+SAM 2 checkpoint are installed):
 
     Generated image
           │
           ▼
-    Grounding DINO   (open-vocabulary text-prompted object detection)
+    Grounding DINO   (open-vocabulary text-prompted object detection, via
+                       transformers' AutoModelForZeroShotObjectDetection)
           │
           │ "bed", "desk", "chair", "lamp", ...
           ▼
     2D bounding boxes
           │
           ▼
-    SAM 2            (boxes used as prompts for mask prediction)
+    SAM 2            (boxes used as prompts for mask prediction, via the
+                       `sam2` package's SAM2ImagePredictor)
           │
           ▼
     Individual furniture masks   (one binary mask per detected item)
@@ -28,30 +31,55 @@ size as the source image, white = furniture pixel / black = background).
 The full result is returned in the HTTP response AND written to disk as JSON
 under `SEGMENTATION_RESULTS_DIR` for later reuse (e.g. product matching).
 
-Detection back-ends (chosen automatically via env vars):
-  • Grounding DINO + SAM 2 on Replicate  — used when REPLICATE_API_TOKEN is set
-  • Gemini Vision fallback                — always available when GEMINI_API_KEY is set,
-                                             also used if the Replicate stages fail.
-    The Gemini fallback can only produce bounding boxes, so its "masks" are a
-    rectangular approximation of the box — each item's `mask_precise` flag
-    tells you which kind of mask you got.
+Everything runs on whatever machine hosts this FastAPI process — the phone
+client only uploads a photo and downloads the JSON result, so its hardware
+is irrelevant. Device selection is automatic (`cuda` if available, else
+`cpu`); CPU inference works but is much slower.
+
+Detection back-ends (chosen automatically):
+  • Grounding DINO + SAM 2, run locally — used whenever the dependencies
+    (torch, transformers, sam2) are installed and a SAM 2 checkpoint is
+    present on disk.
+  • Gemini Vision fallback — always available when GEMINI_API_KEY is set,
+    also used if the local pipeline isn't set up yet or fails at runtime.
+    The Gemini fallback can only produce bounding boxes, so its "masks" are
+    a rectangular approximation of the box — each item's `mask_precise`
+    flag tells you which kind of mask you got.
+
+Setup (one-time, per machine that runs this backend)
+──────────────────────────────────────────────────────
+  pip install torch torchvision transformers sam2
+  # (On a CPU-only machine, prefer the smaller CPU wheel instead:
+  #  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu)
+
+  Download a SAM 2.1 checkpoint into backend/checkpoints/, e.g. the "small"
+  variant (best CPU/GPU tradeoff, ~180MB):
+      curl -L -o checkpoints/sam2.1_hiera_small.pt \
+        https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt
+
+  Grounding DINO's weights (IDEA-Research/grounding-dino-tiny, ~660MB) are
+  downloaded automatically from the Hugging Face Hub on first use — no
+  manual step needed for that half of the pipeline.
 
 Env vars
 ────────
-  GROUNDING_DINO_MODEL   Replicate model slug for stage 1 (default: adirik/grounding-dino)
-  SAM2_MODEL             Replicate model slug for stage 2 (default: meta/sam-2)
-  SAM_BOX_THRESHOLD      Confidence threshold for detection boxes (default: 0.30)
-  SAM_TEXT_THRESHOLD     Text-matching threshold for Grounding DINO (default: 0.25)
+  GROUNDING_DINO_MODEL      Hugging Face model id (default: IDEA-Research/grounding-dino-tiny)
+  SAM2_CHECKPOINT           Path to a local SAM 2.1 checkpoint (default: checkpoints/sam2.1_hiera_small.pt)
+  SAM2_MODEL_CFG            Matching hydra config name (default: configs/sam2.1/sam2.1_hiera_s.yaml)
+  SEGMENTATION_DEVICE       Force "cuda" or "cpu" (default: auto-detect via torch.cuda.is_available())
+  SAM_BOX_THRESHOLD         Confidence threshold for detection boxes (default: 0.30)
+  SAM_TEXT_THRESHOLD        Text-matching threshold for Grounding DINO (default: 0.25)
   SEGMENTATION_RESULTS_DIR  Folder to persist each result as JSON (default: segmentation_results)
-  REPLICATE_API_TOKEN    Already used by /generate-room
-  GEMINI_API_KEY         Already used by /generate-room
-  GEMINI_VISION_MODEL    Gemini model for bbox detection fallback (default: gemini-2.0-flash)
+  GEMINI_API_KEY            Already used by /generate-room
+  GEMINI_VISION_MODEL       Gemini model for bbox detection fallback (default: gemini-2.0-flash)
 """
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
+import threading
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -67,17 +95,25 @@ from pydantic import BaseModel
 router = APIRouter(tags=["segmentation"])
 
 # ── Furniture vocabulary used as the Grounding DINO text prompt ────────────
+# Grounding DINO requires lowercase phrases separated by " . " and a
+# trailing period.
 _FURNITURE_PROMPT = (
     "sofa . couch . armchair . chair . dining chair . office chair . stool . bench . ottoman . "
     "coffee table . dining table . side table . end table . console table . desk . "
     "bed . headboard . nightstand . dresser . wardrobe . bookshelf . bookcase . "
-    "cabinet . TV stand . media console . "
+    "cabinet . tv stand . media console . "
     "floor lamp . table lamp . pendant lamp . chandelier . "
     "rug . carpet . curtain . blinds . "
-    "plant . artwork . painting . mirror . vase . decoration"
+    "plant . artwork . painting . mirror . vase . decoration ."
 )
 
 _RESULTS_DIR = Path(os.getenv("SEGMENTATION_RESULTS_DIR", "segmentation_results"))
+
+_LOCAL_DEPS_HINT = (
+    "Local segmentation dependencies are missing or not set up. "
+    "Run: pip install torch torchvision transformers sam2, and download a SAM 2 "
+    "checkpoint — see the Furniture Segmentation section of the README."
+)
 
 
 # ── Pydantic response models ────────────────────────────────────────────────
@@ -110,7 +146,7 @@ class SegmentationResult(BaseModel):
     items: list[FurnitureItem]
     counts: dict[str, int]      # {"sofa": 1, "chair": 2, …}
     total: int
-    method: str                 # "grounded_sam" | "gemini_vision"
+    method: str                 # "grounding_dino_sam2" | "gemini_vision"
 
 
 # ── Image / colour helpers ──────────────────────────────────────────────────
@@ -183,204 +219,143 @@ def _build_item(
     )
 
 
-# ── Replicate polling ───────────────────────────────────────────────────────
+# ── Local model loading (lazy singletons, loaded once per process) ─────────
 
-async def _poll_replicate(
-    client: httpx.AsyncClient,
-    prediction: dict,
-    token: str,
-    max_polls: int = 24,
-) -> dict:
-    for _ in range(max_polls):
-        status = prediction.get("status")
-        if status == "succeeded":
-            return prediction
-        if status in {"failed", "canceled"}:
-            raise HTTPException(
-                502,
-                f"Replicate prediction {status}: {prediction.get('error')}",
-            )
-        get_url = prediction.get("urls", {}).get("get")
-        if not get_url:
-            return prediction
-        await asyncio.sleep(5)
-        poll = await client.get(get_url, headers={"Authorization": f"Bearer {token}"})
-        poll.raise_for_status()
-        prediction = poll.json()
-    raise HTTPException(504, "Replicate prediction timed out.")
+_model_lock = threading.Lock()
+_grounding_dino_cache: tuple[Any, Any, str] | None = None
+_sam2_predictor_cache: tuple[Any, str] | None = None
 
 
-async def _run_replicate_model(
-    client: httpx.AsyncClient, model: str, token: str, model_input: dict
-) -> Any:
-    resp = await client.post(
-        f"https://api.replicate.com/v1/models/{model}/predictions",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Prefer": "wait=60",
-        },
-        json={"input": model_input},
-    )
-    resp.raise_for_status()
-    prediction = await _poll_replicate(client, resp.json(), token)
-    return prediction.get("output")
+def _get_device() -> str:
+    override = os.getenv("SEGMENTATION_DEVICE")
+    if override:
+        return override
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
 
 
-# ── Stage 1: Grounding DINO (image + text prompt → boxes) ──────────────────
+def _get_grounding_dino() -> tuple[Any, Any, str]:
+    """Returns (processor, model, device), loading the model on first call."""
+    global _grounding_dino_cache
+    if _grounding_dino_cache is not None:
+        return _grounding_dino_cache
 
-def _parse_detection_output(output: Any) -> list[dict]:
-    """
-    Normalise a Grounding DINO-style output into:
-      [{"label": str, "confidence": float, "box": [x1,y1,x2,y2]}, …]
+    with _model_lock:
+        if _grounding_dino_cache is None:
+            try:
+                from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+            except ImportError as exc:
+                raise HTTPException(500, _LOCAL_DEPS_HINT) from exc
 
-    Handles the common Replicate output shapes:
-      Shape A — {"detections": [{"label":…, "score":…, "box":…}, …]}
-      Shape B — {"boxes": […], "labels": […], "scores": […]}
-      Shape C — {"json_data": "<json string with a list or {'annotations': […]}>"}
-    """
-    if isinstance(output, str):
-        try:
-            output = json.loads(output)
-        except Exception:
-            return []
+            model_id = os.getenv("GROUNDING_DINO_MODEL", "IDEA-Research/grounding-dino-tiny")
+            device = _get_device()
+            processor = AutoProcessor.from_pretrained(model_id)
+            model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
+            model.eval()
+            _grounding_dino_cache = (processor, model, device)
 
-    if isinstance(output, list):
-        return [
-            {
-                "label": str(d.get("label", d.get("class_name", "furniture"))),
-                "confidence": float(d.get("score", d.get("confidence", 0.8))),
-                "box": d.get("box", d.get("bbox", [])),
-            }
-            for d in output
-            if isinstance(d, dict)
-        ]
+    return _grounding_dino_cache
 
-    if not isinstance(output, dict):
-        return []
 
-    if "detections" in output:
-        return [
-            {
-                "label": str(d.get("label", "furniture")),
-                "confidence": float(d.get("score", d.get("confidence", 0.8))),
-                "box": d.get("box", d.get("bbox", [])),
-            }
-            for d in output["detections"]
-        ]
+def _get_sam2_predictor() -> tuple[Any, str]:
+    """Returns (SAM2ImagePredictor, device), loading the model on first call."""
+    global _sam2_predictor_cache
+    if _sam2_predictor_cache is not None:
+        return _sam2_predictor_cache
 
-    if "json_data" in output:
-        try:
-            parsed = json.loads(output["json_data"])
-            annotations = parsed.get("annotations", parsed) if isinstance(parsed, dict) else parsed
-            return _parse_detection_output(annotations)
-        except Exception:
-            return []
+    with _model_lock:
+        if _sam2_predictor_cache is None:
+            try:
+                from sam2.build_sam import build_sam2
+                from sam2.sam2_image_predictor import SAM2ImagePredictor
+            except ImportError as exc:
+                raise HTTPException(500, _LOCAL_DEPS_HINT) from exc
 
-    boxes = output.get("boxes", [])
-    labels = output.get("labels", [])
-    scores = output.get("scores", [])
+            checkpoint = os.getenv("SAM2_CHECKPOINT", "checkpoints/sam2.1_hiera_small.pt")
+            model_cfg = os.getenv("SAM2_MODEL_CFG", "configs/sam2.1/sam2.1_hiera_s.yaml")
+            if not Path(checkpoint).exists():
+                raise HTTPException(
+                    500,
+                    f"SAM 2 checkpoint not found at '{checkpoint}'. Download it first — "
+                    "see the Furniture Segmentation section of the README.",
+                )
+
+            device = _get_device()
+            sam2_model = build_sam2(model_cfg, checkpoint, device=device)
+            _sam2_predictor_cache = (SAM2ImagePredictor(sam2_model), device)
+
+    return _sam2_predictor_cache
+
+
+# ── Stage 1: Grounding DINO (image + text prompt → boxes), run locally ─────
+
+def _detect_with_grounding_dino_local(img: Image.Image) -> list[dict]:
+    import torch
+
+    processor, model, device = _get_grounding_dino()
+    box_threshold = float(os.getenv("SAM_BOX_THRESHOLD", "0.30"))
+    text_threshold = float(os.getenv("SAM_TEXT_THRESHOLD", "0.25"))
+
+    inputs = processor(images=img, text=_FURNITURE_PROMPT, return_tensors="pt").to(device)
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    results = processor.post_process_grounded_object_detection(
+        outputs,
+        inputs.input_ids,
+        box_threshold=box_threshold,
+        text_threshold=text_threshold,
+        target_sizes=[img.size[::-1]],  # (height, width)
+    )[0]
+
+    labels = results.get("text_labels") or results.get("labels") or []
+    boxes = results["boxes"].tolist()   # pixel xyxy, already scaled to img size
+    scores = results["scores"].tolist()
+
     return [
-        {
-            "label": labels[i] if i < len(labels) else "furniture",
-            "confidence": float(scores[i]) if i < len(scores) else 0.8,
-            "box": box,
-        }
-        for i, box in enumerate(boxes)
+        {"label": str(label) or "furniture", "confidence": float(score), "box": [float(v) for v in box]}
+        for box, score, label in zip(boxes, scores, labels)
     ]
 
 
-async def _detect_with_grounding_dino(image_bytes: bytes, mime_type: str) -> list[dict]:
-    token = os.getenv("REPLICATE_API_TOKEN", "")
-    model = os.getenv("GROUNDING_DINO_MODEL", "adirik/grounding-dino")
+# ── Stage 2: SAM 2 (image + boxes → one mask per box), run locally ─────────
 
-    if not token:
-        raise HTTPException(500, "REPLICATE_API_TOKEN is not configured.")
-
-    try:
-        async with httpx.AsyncClient(timeout=180) as client:
-            output = await _run_replicate_model(
-                client,
-                model,
-                token,
-                {
-                    "image": _build_data_url(image_bytes, mime_type),
-                    "query": _FURNITURE_PROMPT,
-                    "box_threshold": float(os.getenv("SAM_BOX_THRESHOLD", "0.30")),
-                    "text_threshold": float(os.getenv("SAM_TEXT_THRESHOLD", "0.25")),
-                },
-            )
-    except HTTPException:
-        raise
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(502, f"Grounding DINO failed: {exc.response.text}") from exc
-    except Exception as exc:
-        raise HTTPException(502, f"Grounding DINO failed: {exc}") from exc
-
-    return _parse_detection_output(output or {})
-
-
-# ── Stage 2: SAM 2 (image + boxes → one mask per box) ───────────────────────
-
-async def _resolve_mask_image(
-    client: httpx.AsyncClient, ref: Any, token: str
-) -> Image.Image | None:
-    if isinstance(ref, dict):
-        ref = ref.get("url") or ref.get("mask") or ref.get("image")
-    if not isinstance(ref, str) or not ref:
-        return None
-
-    try:
-        if ref.startswith("http://") or ref.startswith("https://"):
-            resp = await client.get(ref, headers={"Authorization": f"Bearer {token}"})
-            resp.raise_for_status()
-            return Image.open(BytesIO(resp.content)).convert("L")
-        if ref.startswith("data:"):
-            _, encoded = ref.split(",", 1)
-            return Image.open(BytesIO(base64.b64decode(encoded))).convert("L")
-        return Image.open(BytesIO(base64.b64decode(ref))).convert("L")
-    except Exception:
-        return None
-
-
-async def _segment_boxes_with_sam2(
-    image_bytes: bytes, mime_type: str, boxes_px: list[list[float]]
+def _segment_boxes_with_sam2_local(
+    img: Image.Image, boxes_px: list[list[float]]
 ) -> list[Image.Image | None]:
-    """
-    Prompts SAM 2 with the Grounding DINO boxes and returns one mask per box,
-    in the same order as `boxes_px`. Returns an all-None list (same length)
-    if the model output can't be reliably matched 1:1 to the input boxes —
-    callers then fall back to a bbox-rectangle mask for that request.
-    """
     if not boxes_px:
         return []
 
-    token = os.getenv("REPLICATE_API_TOKEN", "")
-    model = os.getenv("SAM2_MODEL", "meta/sam-2")
+    import numpy as np
+    import torch
 
-    try:
-        async with httpx.AsyncClient(timeout=180) as client:
-            output = await _run_replicate_model(
-                client,
-                model,
-                token,
-                {
-                    "image": _build_data_url(image_bytes, mime_type),
-                    "input_boxes": json.dumps(boxes_px),
-                },
-            )
-            if not isinstance(output, dict):
-                return [None] * len(boxes_px)
+    predictor, device = _get_sam2_predictor()
+    image_np = np.array(img.convert("RGB"))
 
-            mask_refs = output.get("individual_masks") or output.get("masks") or []
-            if len(mask_refs) != len(boxes_px):
-                # Model didn't honour the box prompts 1:1 — don't risk mismatched
-                # mask/label pairing, let the caller fall back to bbox masks.
-                return [None] * len(boxes_px)
+    autocast_ctx = (
+        torch.autocast("cuda", dtype=torch.bfloat16)
+        if device == "cuda"
+        else contextlib.nullcontext()
+    )
 
-            return [await _resolve_mask_image(client, ref, token) for ref in mask_refs]
-    except Exception:
-        return [None] * len(boxes_px)
+    masks_out: list[Image.Image | None] = []
+    with torch.inference_mode(), autocast_ctx:
+        predictor.set_image(image_np)
+        for box in boxes_px:
+            try:
+                masks, _scores, _logits = predictor.predict(
+                    box=np.array(box), multimask_output=False
+                )
+                mask_arr = (masks[0] > 0).astype("uint8") * 255
+                masks_out.append(Image.fromarray(mask_arr, mode="L"))
+            except Exception as exc:
+                print(f"[segmentation] SAM 2 failed on box {box}: {exc}")
+                masks_out.append(None)
+
+    return masks_out
 
 
 # ── Gemini Vision fallback (boxes only, no true mask) ───────────────────────
@@ -472,35 +447,27 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
     """
     Public helper — also called from main.py's /generate-room when segment=true.
 
-    Runs Grounding DINO (boxes) → SAM 2 (masks) when REPLICATE_API_TOKEN is
-    configured, falling back to Gemini Vision (boxes only) otherwise or if
-    either Replicate stage fails.
+    Runs Grounding DINO (boxes) → SAM 2 (masks) locally, falling back to
+    Gemini Vision (boxes only) if the local dependencies/checkpoint aren't
+    set up yet, or if either local stage fails at runtime.
     """
     img = Image.open(BytesIO(image_bytes)).convert("RGB")
     W, H = img.size
 
-    use_sam = bool(os.getenv("REPLICATE_API_TOKEN"))
-    method = "grounded_sam" if use_sam else "gemini_vision"
+    method = "grounding_dino_sam2"
     mask_imgs: list[Image.Image | None] = []
 
     try:
-        if use_sam:
-            raw = await _detect_with_grounding_dino(image_bytes, mime_type)
-            boxes_px = []
-            for det in raw:
-                box = det.get("box", [])
-                if len(box) != 4:
-                    boxes_px.append([0, 0, 0, 0])
-                    continue
-                x1, y1, x2, y2 = (float(v) for v in box)
-                # SAM 2 expects pixel coordinates; normalise-looking boxes (<=1) are scaled up.
-                if x2 <= 1.5 and y2 <= 1.5:
-                    x1, y1, x2, y2 = x1 * W, y1 * H, x2 * W, y2 * H
-                boxes_px.append([x1, y1, x2, y2])
-            mask_imgs = await _segment_boxes_with_sam2(image_bytes, mime_type, boxes_px) if raw else []
-        else:
-            raw = await _detect_with_gemini(image_bytes, mime_type)
+        raw = await asyncio.to_thread(_detect_with_grounding_dino_local, img)
+        boxes_px = [det["box"] for det in raw]
+        mask_imgs = (
+            await asyncio.to_thread(_segment_boxes_with_sam2_local, img, boxes_px) if raw else []
+        )
     except HTTPException:
+        raw = await _detect_with_gemini(image_bytes, mime_type)
+        method = "gemini_vision"
+    except Exception as exc:
+        print(f"[segmentation] local Grounding DINO / SAM 2 pipeline failed: {exc}")
         raw = await _detect_with_gemini(image_bytes, mime_type)
         method = "gemini_vision"
 
@@ -515,8 +482,8 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
 
         x1, y1, x2, y2 = (float(v) for v in box)
 
-        # Normalise pixel coords if needed (SAM/DINO often return pixels)
-        if x2 > 1.5:
+        # Normalise pixel coords if needed (Grounding DINO/Gemini return pixels or 0-1).
+        if x2 > 1.5 or y2 > 1.5:
             x1, y1, x2, y2 = x1 / W, y1 / H, x2 / W, y2 / H
 
         x1, y1 = max(0.0, x1), max(0.0, y1)
@@ -543,6 +510,7 @@ async def segment_furniture(image: UploadFile = File(...)):
 
     Pipeline: Grounding DINO detects each furniture item as a labelled box,
     then SAM 2 turns each box into a precise pixel mask — one mask per item.
+    Both models run locally on whatever machine hosts this backend.
 
     Returns each detected item with:
     - `label` & `confidence`
