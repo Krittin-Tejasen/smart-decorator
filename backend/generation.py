@@ -40,12 +40,15 @@ _STYLE_DESCRIPTIONS: dict[str, str] = {
         "natural textures, uncluttered layout"
     ),
     "industrial_loft": (
-        "Industrial / Loft: exposed concrete and brick, black steel frames, "
-        "dark stained wood, utilitarian raw-material finishes"
+        "Industrial / Loft: black steel-framed furniture, dark stained wood "
+        "pieces, leather upholstery, and exposed-bulb metal light fixtures - "
+        "the raw-material look comes from the furniture and fixtures "
+        "themselves, not from changing what the walls/floor/ceiling are made of"
     ),
     "modern_luxury": (
-        "Modern Luxury: polished marble and glass surfaces, metallic gold "
-        "or chrome accents, glossy finishes, upscale contemporary furniture"
+        "Modern Luxury: furniture with polished marble-top tables and glass "
+        "accents, metallic gold or chrome hardware and fixtures, glossy-finish "
+        "furniture pieces, upscale contemporary silhouettes"
     ),
 }
 
@@ -78,12 +81,22 @@ Rules:
   that wall has room for it).
 - Favor a smaller number of well-placed pieces over an exhaustive shopping
   list - do not force in more furniture than the space comfortably fits.
+- The room must end up furnished appropriately for its type - never describe
+  a bare or empty result.
 - Use natural descriptive language only. Never use attention-weighting
   syntax such as (word:1.2) - the target model does not support it.
 - Mention concrete furniture, materials, and lighting appropriate to the
   style and color.
 - Do not mention changing the room layout, walls, windows, doors, or
   camera angle - those must be preserved as-is.
+- Never mention adding, moving, upgrading, or restyling any electrical
+  outlet, switch, vent, or wall-mounted fixture - don't describe them at
+  all. They are handled separately and must stay exactly as in the photo.
+- Never describe changing what a wall, ceiling, or floor is physically made
+  of (e.g. turning a painted wall into exposed brick, concrete, stone, or
+  wood paneling, or tile into hardwood). Express the requested style only
+  through furniture, textiles, rugs, lighting fixtures, decor, and wall
+  paint color - the underlying construction material never changes.
 - Output only the paragraph, no headings or extra commentary.
 """.strip()
 
@@ -95,8 +108,27 @@ Rules:
 # visible" text in front of the image model, which is what actually keeps it
 # from painting over them. This clause is appended after whichever prompt
 # path ran, so it's never at the mercy of what the composer happened to say.
+#
+# Extended 2026-09-10 after Experiment A's blind-rated results: the two
+# biggest human-flagged failure patterns beyond simple blocking were (1) the
+# model hallucinating NEW outlets/switches that weren't in the original photo
+# at all, and (2) a style like "industrial" being interpreted as literally
+# changing wall material to brick/concrete, which is physically impossible
+# without demolition. Neither was covered by the original wording, which only
+# talked about not *covering* existing fixtures - added explicit rules for
+# both below.
 _STRUCTURE_PRESERVATION_CLAUSE = """
-Preserve the original room layout, walls, floor, windows, doors, and all visible fixtures exactly as shown in the photo. Do not change the room structure, camera angle, or perspective. Every door, window, electrical outlet, and light switch visible in the original photo must remain fully visible and unobstructed in the result - do not place furniture, decor, or any object in front of, over, or blocking them. Leave enough open walking space. Return a photorealistic decorated room image only.
+Preserve the original room layout, walls, floor, windows, doors, and all visible fixtures exactly as shown in the photo. Do not change the room structure, camera angle, or perspective.
+
+Every door, window, electrical outlet, and light switch visible in the original photo must remain fully visible and unobstructed in the result - do not place furniture, decor, or any object in front of, over, or blocking them. Leave enough open walking space.
+
+Do not add, duplicate, relocate, or restyle any electrical outlet, switch, vent, or wall-mounted fixture. The only outlets/switches allowed in the result are the exact ones already visible in the original photo, in their exact original positions - do not invent new ones anywhere else in the room, and do not feature or draw attention to them.
+
+Walls, ceiling, and floor must keep their exact original construction material - repainting or recoloring a wall to match the requested palette is fine, but never change what a surface is physically made of (for example: never turn a plain/painted wall into exposed brick, concrete, stone, or wood paneling; never turn floor tile into hardwood or carpet, or vice versa) even if the requested style is normally associated with that material. Express the style entirely through furniture, textiles, rugs, lighting fixtures, and decor instead.
+
+The result must contain furniture and decor appropriate to the room type - it must not be left empty, bare, or mostly unfurnished.
+
+Return a photorealistic decorated room image only.
 """.strip()
 
 
@@ -108,7 +140,9 @@ def build_static_fallback_prompt(room_type: str, style: str, color: str) -> str:
     color_desc = _COLOR_DESCRIPTIONS.get(color, color)
     return (
         f"Redesign this uploaded {room_type} as a realistic interior in the "
-        f"following style: {style_desc}. Use {color_desc}.\n\n"
+        f"following style: {style_desc}. Use {color_desc}. "
+        f"Add realistic furniture and decor that fit the room's scale and "
+        f"style - the room must not be left empty.\n\n"
         f"{_STRUCTURE_PRESERVATION_CLAUSE}"
     )
 
@@ -194,24 +228,50 @@ style/color it was supposed to become.
 Check all of the following against the REDECORATED photo:
 1. It plausibly shows the same room type as intended.
 2. The decor plausibly matches the requested style/color intent.
-3. Every door, window, and visible electrical outlet/light switch that
+3. The room actually contains furniture and decor appropriate to the room
+   type - it is not empty, bare, or only has one or two minor items. FAIL if
+   the "redesign" is essentially still an empty room with a different wall
+   color or texture.
+4. Every door, window, and visible electrical outlet/light switch that
    appears in the ORIGINAL photo is still physically usable in the
-   REDECORATED photo - it does not need to be fully unobstructed, only
-   reachable and functional. FAIL this only when a large, solid piece of
-   furniture (a sofa, bed, cabinet, bookshelf, table, etc.) is placed
-   directly in front of or on top of it so it could not actually be used or
-   opened. Do NOT fail for a curtain, lamp, cord, rug, plant, or small decor
-   item merely appearing near or partially over it - those are cosmetic and
-   normal in real decorated rooms.
-4. The room's overall layout, walls, and camera angle still look like the
+   REDECORATED photo. The test is strictly functional, not proximity: could
+   a person actually open the door, reach the window, or plug something in
+   WITHOUT moving the furniture first? FAIL only when a large, solid piece
+   of furniture (a sofa, bed, cabinet, bookshelf, table, etc.) directly and
+   completely blocks that function - e.g. pressed flush against a door so
+   it cannot swing open at all, or physically covering an outlet's face so
+   a plug cannot be inserted. PASS when furniture is merely positioned
+   nearby, facing, or a couple of feet in front of a door/window/fixture
+   but there is still real clearance to open it, walk around the furniture,
+   or reach it - this is completely normal in real furnished rooms (e.g. a
+   desk a few feet in front of a door, with room for the door to swing
+   open past it, is fine and should PASS). When in doubt about whether
+   clearance is real or not, PASS - this check exists for furniture that
+   makes something truly unusable, not for furniture that is merely in the
+   same general area. Do NOT fail for a curtain, lamp, cord, rug, plant, or
+   small decor item merely appearing near or partially over it - those are
+   cosmetic and normal in real decorated rooms.
+5. No electrical outlet, switch, vent, or wall-mounted fixture appears in the
+   REDECORATED photo that isn't in the same position in the ORIGINAL photo.
+   FAIL if the AI added a new one, duplicated one, or moved one to a
+   different spot - outlets/switches must match the original 1:1, not just
+   "not be blocked."
+6. Walls, ceiling, and floor keep the same physical construction material as
+   the ORIGINAL photo - a color/paint change is fine, but FAIL if a surface's
+   material clearly changed (e.g. a plain painted wall became exposed brick,
+   concrete, stone, or wood paneling; floor tile became hardwood or vice
+   versa), even if that material fits the requested style.
+7. The room's overall layout, walls, and camera angle still look like the
    same room, not a different one.
 
-Ignore minor imperfections - only fail on a clear, obvious violation (e.g. a
-window that disappeared, a door blocked by a sofa, an outlet or switch made
-physically unusable by furniture placed directly over it, the wrong room
-type, or a style/color that is clearly not what was asked for).
+Ignore minor imperfections - only fail on a clear, obvious violation of one
+of the checks above (e.g. a window that disappeared, a door blocked by a
+sofa, a hallucinated extra outlet, a wall that changed material, an empty
+room, the wrong room type, or a style/color that is clearly not what was
+asked for).
 
-Reply with exactly one line: either "PASS" or "FAIL: <short reason>".
+Reply with exactly one line: either "PASS" or "FAIL: <short reason naming
+which check above it violates>".
 """.strip()
 
 
@@ -223,17 +283,18 @@ async def critique_generated_image(
     room_type: str,
     style: str,
     color: str,
-) -> bool:
+) -> tuple[bool, str]:
     """Critic Agent: asks Gemini Vision to compare the generated image against
     the original photo, checking both style/room-type intent and that doors,
     windows, and outlets/switches from the original weren't covered or
-    removed. Returns True (pass) whenever the check can't be completed (no
-    API key, network error, unexpected response) - a broken critic should
-    never block a user's generation, only a *confirmed* mismatch should.
+    removed. Returns (passed, raw_verdict_text). passed is True whenever the
+    check can't be completed (no API key, network error, unexpected
+    response) - a broken critic should never block a user's generation,
+    only a *confirmed* mismatch should.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        return True
+        return True, ""
 
     model = os.getenv("GEMINI_CRITIC_MODEL", "gemini-3.6-flash")
     style_desc = _STYLE_DESCRIPTIONS.get(style, style)
@@ -286,12 +347,39 @@ async def critique_generated_image(
         verdict = response_data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as exc:
         print(f"critique_generated_image failed, treating as pass: {exc}")
-        return True
+        return True, ""
 
     passed = verdict.upper().startswith("PASS")
     if not passed:
         print(f"critique_generated_image flagged a mismatch: {verdict}")
-    return passed
+    return passed, verdict
+
+
+# How many times the Critic Agent gets to reject and force a regeneration
+# before we just accept whatever came out. 4 as of 2026-09-10 (was 3, 2, 1).
+# At 3: 11/12 case2+case4 chains eventually passed, 1/12 (a nightstand vs.
+# outlet placement conflict) still failed after all 3 retries - user asked
+# to push to 4 for the full-scale run to give that class of stubborn case
+# one more shot. Each extra retry level raises worst-case cost per
+# condition by one more image-gen call - this is now a real cost driver,
+# not a rounding error, at full scope (see run_experiment_a.py's printed
+# estimate before spending).
+CRITIC_MAX_RETRIES = int(os.getenv("CRITIC_MAX_RETRIES", "4"))
+
+
+def critic_retry_reminder(verdict: str) -> str:
+    """Builds a targeted retry addendum from the critic's actual FAIL reason,
+    rather than a generic one - there are now several distinct failure modes
+    (empty room, hallucinated outlet, wall material change, blocked
+    fixture, ...) and telling the model exactly what it got wrong works
+    better than a one-size-fits-all reminder.
+    """
+    reason = verdict.split(":", 1)[1].strip() if ":" in verdict else verdict
+    return (
+        f"\n\nIMPORTANT: the previous attempt failed review for this specific "
+        f"reason: {reason}. Fix exactly that issue this time, while still "
+        f"following every instruction above."
+    )
 
 
 def first_output_url(value: Any) -> str | None:
@@ -583,24 +671,31 @@ async def generate_room(
     generated_image = await run_provider()
 
     # Critic Agent: the mock provider just watermarks the original photo, so
-    # there's nothing to judge. Real providers get one automatic retry if the
-    # first attempt doesn't actually match what was asked for, comparing
-    # against the original photo so it can specifically catch a covered or
-    # missing door/window/outlet, not just a wrong room type/style.
+    # there's nothing to judge. Real providers get up to CRITIC_MAX_RETRIES
+    # automatic retries if the attempt doesn't actually match what was
+    # asked for, comparing against the original photo so it can specifically
+    # catch a covered/missing door/window/outlet, a hallucinated new one, a
+    # changed wall material, or a still-empty room - not just a wrong room
+    # type/style. Each retry re-checks with the critic rather than assuming
+    # the fix worked, since one correction pass doesn't always stick.
     if provider != "mock":
         gen_bytes, gen_mime = decode_data_url(generated_image)
-        passed = await critique_generated_image(
+        passed, verdict = await critique_generated_image(
             image_bytes, mime_type, gen_bytes, gen_mime, room_type, style, color
         )
-        if not passed:
-            print("Critic Agent rejected the first attempt, regenerating once...")
-            retry_reminder = (
-                "\n\nIMPORTANT: the previous attempt failed review for covering or "
-                "removing a door, window, outlet, or switch. Be strict about "
-                "keeping all of them fully visible and unobstructed this time."
+        retries_used = 0
+        while not passed and retries_used < CRITIC_MAX_RETRIES:
+            retries_used += 1
+            print(
+                f"Critic Agent rejected attempt {retries_used} "
+                f"(of {CRITIC_MAX_RETRIES} retries allowed): {verdict}"
             )
-            prompt = f"{prompt}{retry_reminder}"
+            prompt = f"{prompt}{critic_retry_reminder(verdict)}"
             generated_image = await run_provider()
+            gen_bytes, gen_mime = decode_data_url(generated_image)
+            passed, verdict = await critique_generated_image(
+                image_bytes, mime_type, gen_bytes, gen_mime, room_type, style, color
+            )
 
     response: dict[str, Any] = {
         "generated_image": generated_image,
