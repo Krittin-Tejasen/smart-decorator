@@ -5,7 +5,10 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/models/ar_capture_state.dart';
+import '../../../core/services/room_capture_service.dart';
 import '../../../core/widgets/app_icons.dart';
+import '../../../screens/views/ar_photo_capture_view.dart';
 import '../../../shared/providers/app_state_provider.dart';
 import '../../../shared/models/design_style.dart';
 import '../../../shared/models/color_option.dart';
@@ -31,13 +34,105 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> pickImage(WidgetRef ref) async {
     final picker = ImagePicker();
-
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
-      ref
-          .read(appStateProvider.notifier)
-          .setUploadedImage(File(pickedFile.path));
+      ref.read(appStateProvider.notifier).setUploadedImage(File(pickedFile.path));
     }
+  }
+
+  Future<void> _showPhotoSourceSheet(BuildContext context, WidgetRef ref) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.muted.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Add Room Photo',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.ink)),
+              ),
+            ),
+            const SizedBox(height: 4),
+            ListTile(
+              leading: Container(
+                width: 36, height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.sageTint,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.view_in_ar_rounded,
+                    size: 18, color: AppColors.sageDeep),
+              ),
+              title: const Text('AR Camera',
+                  style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.ink)),
+              subtitle: const Text('Capture with spatial data',
+                  style: TextStyle(fontSize: 12, color: AppColors.muted)),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final result = await Navigator.push<ARCaptureState?>(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const ARPhotoCaptureView(),
+                      fullscreenDialog: true),
+                );
+                if (result != null && context.mounted) {
+                  // Update local UI immediately
+                  ref.read(appStateProvider.notifier)
+                    ..setUploadedImage(File(result.imagePath))
+                    ..setARCaptureState(result);
+
+                  // Save photo + spatial data to Supabase in background
+                  RoomCaptureService().saveCapture(capture: result).then((saved) {
+                    debugPrint('Saved to Supabase: ${saved.id}');
+                  }).catchError((e) {
+                    debugPrint('Supabase save failed: $e');
+                  });
+                }
+              },
+            ),
+            ListTile(
+              leading: Container(
+                width: 36, height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.sageTint,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.photo_library_rounded,
+                    size: 18, color: AppColors.sageDeep),
+              ),
+              title: const Text('Photo Library',
+                  style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.ink)),
+              subtitle: const Text('Choose an existing photo',
+                  style: TextStyle(fontSize: 12, color: AppColors.muted)),
+              onTap: () {
+                Navigator.pop(ctx);
+                pickImage(ref);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -507,11 +602,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 const SizedBox(height: 12),
 
                 if (appState.uploadedImage == null)
-                  ///////////////  Upload Button
+                  ///////////////  Upload / AR Camera Button
                   GestureDetector(
-                    onTap: () {
-                      pickImage(ref);
-                    },
+                    onTap: () => _showPhotoSourceSheet(context, ref),
 
                     child: Container(
                       width: double.infinity,
@@ -541,20 +634,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: const Icon(
-                              Icons.camera_alt_rounded,
+                              Icons.add_a_photo_rounded,
                               size: 18,
                               color: AppColors.sageDeep,
                             ),
                           ),
                           const SizedBox(width: 12),
-                          const Text(
-                            'Upload Photo',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.ink,
+                          const Expanded(
+                            child: Text(
+                              'Take a photo or Upload photo',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.ink,
+                              ),
                             ),
                           ),
+                          const Icon(Icons.chevron_right_rounded,
+                              color: AppColors.muted, size: 20),
                         ],
                       ),
                     ),
@@ -598,82 +695,137 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 const SizedBox(height: 18),
 
                 ///////////////  LiDAR Scan Button Card
-                Material(
-                  color: AppColors.sageDeep,
-                  borderRadius: BorderRadius.circular(20),
-                  clipBehavior: Clip.antiAlias,
+                Builder(builder: (context) {
+                  final scanDone = appState.scanCompleted;
+                  return Stack(
+                    children: [
+                      Material(
+                        color: scanDone
+                            ? const Color(0xFF2E6B4F)   // darker green when done
+                            : AppColors.sageDeep,
+                        borderRadius: BorderRadius.circular(20),
+                        clipBehavior: Clip.antiAlias,
 
-                  child: InkWell(
-                    onTap: () async {
-                      if (Platform.isAndroid) {
-                        final proceed = await showDialog<bool>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text('Note: Lower Accuracy'),
-                            content: const Text(
-                              'Android devices do not have a LiDAR sensor.\n\n'
-                              'Room scan accuracy will be lower than on an iPhone with LiDAR. '
-                              'Tap each room corner as precisely as possible for the best results.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, false),
-                                child: const Text('Cancel'),
-                              ),
-                              ElevatedButton(
-                                onPressed: () => Navigator.pop(ctx, true),
-                                child: const Text('Got it, continue'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (proceed != true || !context.mounted) return;
-                      }
-                      if (context.mounted) context.push('/scan_room');
-                    },
+                        child: InkWell(
+                          onTap: () async {
+                            if (Platform.isAndroid) {
+                              final proceed = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('Note: Lower Accuracy'),
+                                  content: const Text(
+                                    'Android devices do not have a LiDAR sensor.\n\n'
+                                    'Room scan accuracy will be lower than on an iPhone with LiDAR. '
+                                    'Tap each room corner as precisely as possible for the best results.',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(ctx, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () => Navigator.pop(ctx, true),
+                                      child: const Text('Got it, continue'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (proceed != true || !context.mounted) return;
+                            }
+                            if (context.mounted) context.push('/scan_room');
+                          },
 
-                    child: Padding(
-                      padding: const EdgeInsets.all(18),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                          child: Padding(
+                            padding: const EdgeInsets.all(18),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
-                                const Text(
-                                  'Scan Room\nwith LiDAR',
-                                  style: TextStyle(
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      // "Done" chip shown above title when scan complete
+                                      if (scanDone) ...[
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: Colors.greenAccent.withValues(alpha: 0.2),
+                                            borderRadius: BorderRadius.circular(20),
+                                            border: Border.all(
+                                                color: Colors.greenAccent.withValues(alpha: 0.6)),
+                                          ),
+                                          child: const Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.check_circle_rounded,
+                                                  size: 12, color: Colors.greenAccent),
+                                              SizedBox(width: 4),
+                                              Text('Scan complete',
+                                                  style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.greenAccent,
+                                                      fontWeight: FontWeight.w600)),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                      ],
+
+                                      Text(
+                                        scanDone
+                                            ? 'Room Scanned'
+                                            : 'Scan Room\nwith LiDAR',
+                                        style: const TextStyle(
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+
+                                      const SizedBox(height: 6),
+
+                                      Text(
+                                        scanDone
+                                            ? 'Tap to scan again'
+                                            : 'Precise 3D Room Scan with suitable iOS device',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.white.withValues(alpha: 0.75),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
 
-                                const SizedBox(height: 6),
+                                const SizedBox(width: 12),
 
-                                Text(
-                                  'Precise 3D Room Scan with suitable iOS device',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.white.withValues(alpha: 0.75),
-                                  ),
-                                ),
+                                scanDone
+                                    ? Container(
+                                        width: 64,
+                                        height: 64,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: Colors.greenAccent.withValues(alpha: 0.15),
+                                          border: Border.all(
+                                              color: Colors.greenAccent.withValues(alpha: 0.5),
+                                              width: 2),
+                                        ),
+                                        child: const Icon(Icons.check_rounded,
+                                            color: Colors.greenAccent, size: 32),
+                                      )
+                                    : LidarScanGraphic(
+                                        size: 64,
+                                        bracketColor: AppColors.brass,
+                                      ),
                               ],
                             ),
                           ),
-
-                          const SizedBox(width: 12),
-
-                          LidarScanGraphic(
-                            size: 64,
-                            bracketColor: AppColors.brass,
-                          ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
-                ),
+                    ],
+                  );
+                }),
 
                 const SizedBox(height: 26),
 

@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'dart:io';
 
+import '../../core/models/ar_capture_state.dart';
 import '../models/design_style.dart';
 import '../models/color_option.dart';
 import '../models/room_type.dart';
@@ -30,6 +31,12 @@ class AppState {
 
   final AiModel selectedAiModel;
 
+  /// Spatial metadata from the last AR photo capture.
+  /// Set alongside [uploadedImage] when the user takes a photo via AR Camera.
+  final ARCaptureState? arCaptureState;
+
+  /// True after the user successfully completes and saves a room scan.
+  final bool scanCompleted;
 
   AppState({
     this.selectedRoomType,
@@ -40,6 +47,8 @@ class AppState {
     this.history = const [],
     this.uploadedImage,
     this.selectedAiModel = AiModel.serverDefault,
+    this.arCaptureState,
+    this.scanCompleted = false,
   });
 
   AppState copyWith({
@@ -51,31 +60,20 @@ class AppState {
     List<DesignHistory>? history,
     List<Product>? matchedProducts,
     AiModel? selectedAiModel,
+    ARCaptureState? arCaptureState,
+    bool? scanCompleted,
   }) {
     return AppState(
-      selectedRoomType:
-          selectedRoomType ?? this.selectedRoomType,
-
-      selectedStyle:
-          selectedStyle ?? this.selectedStyle,
-
-      selectedColorOption:
-          selectedColorOption ?? this.selectedColorOption,
-
-      generatedRoomImage:
-          generatedRoomImage ?? this.generatedRoomImage,
-
-      matchedProducts:
-          matchedProducts ?? this.matchedProducts,
-
-      history:
-          history ?? this.history,
-
-      uploadedImage:
-          uploadedImage ?? this.uploadedImage,
-
-      selectedAiModel:
-          selectedAiModel ?? this.selectedAiModel,
+      selectedRoomType:    selectedRoomType    ?? this.selectedRoomType,
+      selectedStyle:       selectedStyle       ?? this.selectedStyle,
+      selectedColorOption: selectedColorOption ?? this.selectedColorOption,
+      generatedRoomImage:  generatedRoomImage  ?? this.generatedRoomImage,
+      matchedProducts:     matchedProducts     ?? this.matchedProducts,
+      history:             history             ?? this.history,
+      uploadedImage:       uploadedImage       ?? this.uploadedImage,
+      selectedAiModel:     selectedAiModel     ?? this.selectedAiModel,
+      arCaptureState:      arCaptureState      ?? this.arCaptureState,
+      scanCompleted:       scanCompleted       ?? this.scanCompleted,
     );
   }
 
@@ -133,20 +131,27 @@ class AppStateNotifier
   }
 
   void setUploadedImage(File image) {
-    state = state.copyWith(
-      uploadedImage: image,
-    );
+    state = state.copyWith(uploadedImage: image);
+  }
+
+  void setARCaptureState(ARCaptureState arState) {
+    state = state.copyWith(arCaptureState: arState);
+  }
+
+  void setScanCompleted() {
+    state = state.copyWith(scanCompleted: true);
   }
 
   void clearUploadedImage() {
     state = AppState(
-      selectedRoomType: state.selectedRoomType,
-      selectedStyle: state.selectedStyle,
+      selectedRoomType:    state.selectedRoomType,
+      selectedStyle:       state.selectedStyle,
       selectedColorOption: state.selectedColorOption,
-      generatedRoomImage: state.generatedRoomImage,
-      matchedProducts: state.matchedProducts,
-      history: state.history,
-      selectedAiModel: state.selectedAiModel,
+      generatedRoomImage:  state.generatedRoomImage,
+      matchedProducts:     state.matchedProducts,
+      history:             state.history,
+      selectedAiModel:     state.selectedAiModel,
+      // arCaptureState intentionally cleared alongside image
     );
   }
 
