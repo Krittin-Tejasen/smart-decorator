@@ -4,10 +4,12 @@ class GenerateRoomResponse {
 
   final String generatedImage;
   final List<Product> products;
+  final String? designId;
 
   GenerateRoomResponse({
     required this.generatedImage,
     required this.products,
+    this.designId,
   });
 
   factory GenerateRoomResponse.fromJson(Map<String, dynamic> json) {
@@ -20,6 +22,7 @@ class GenerateRoomResponse {
               .map((item) => Product.fromJson(item as Map<String, dynamic>))
               .toList()
           : [],
+      designId: json['design_id'] as String?,
     );
   }
 }

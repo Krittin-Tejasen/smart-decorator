@@ -146,7 +146,7 @@ class SegmentationResult(BaseModel):
     items: list[FurnitureItem]
     counts: dict[str, int]      # {"sofa": 1, "chair": 2, …}
     total: int
-    method: str                 # "grounding_dino_sam2" | "gemini_vision"
+    method: str                 # "grounding_dino_sam2" | "gemini_vision" | "none"
 
 
 # ── Image / colour helpers ──────────────────────────────────────────────────
@@ -362,7 +362,7 @@ def _segment_boxes_with_sam2_local(
 
 async def _detect_with_gemini(image_bytes: bytes, mime_type: str) -> list[dict]:
     api_key = os.getenv("GEMINI_API_KEY", "")
-    model = os.getenv("GEMINI_VISION_MODEL", "gemini-2.0-flash")
+    model = os.getenv("GEMINI_VISION_MODEL", "gemini-3.6-flash")
 
     if not api_key:
         raise HTTPException(500, "GEMINI_API_KEY is not configured.")
@@ -463,13 +463,20 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
         mask_imgs = (
             await asyncio.to_thread(_segment_boxes_with_sam2_local, img, boxes_px) if raw else []
         )
-    except HTTPException:
-        raw = await _detect_with_gemini(image_bytes, mime_type)
-        method = "gemini_vision"
     except Exception as exc:
         print(f"[segmentation] local Grounding DINO / SAM 2 pipeline failed: {exc}")
-        raw = await _detect_with_gemini(image_bytes, mime_type)
-        method = "gemini_vision"
+        mask_imgs = []
+        try:
+            raw = await _detect_with_gemini(image_bytes, mime_type)
+            method = "gemini_vision"
+        except Exception as fallback_exc:
+            # A segmentation failure must never take down /generate-room —
+            # the generated room image is still a perfectly good result on
+            # its own. Worst case here is an empty furniture list, not a
+            # 502 for the whole request.
+            print(f"[segmentation] Gemini Vision fallback also failed: {fallback_exc}")
+            raw = []
+            method = "none"
 
     if len(mask_imgs) != len(raw):
         mask_imgs = [None] * len(raw)

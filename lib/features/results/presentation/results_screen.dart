@@ -56,6 +56,23 @@ class ResultsScreen
               _GeneratedRoomImage(
                 imageData: appState.generatedRoomImage,
                 originalImage: appState.uploadedImage,
+                isSaved: appState.designSaved,
+                isSaving: appState.isSavingDesign,
+                onFavoriteTap: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  try {
+                    await ref
+                        .read(appStateProvider.notifier)
+                        .saveGeneratedDesignToSupabase();
+                    messenger.showSnackBar(
+                      const SnackBar(content: Text('Design saved')),
+                    );
+                  } catch (e) {
+                    messenger.showSnackBar(
+                      SnackBar(content: Text('Could not save design: $e')),
+                    );
+                  }
+                },
               ),
 
               const SizedBox(height: 18),
@@ -128,10 +145,16 @@ class ResultsScreen
 class _GeneratedRoomImage extends StatefulWidget {
   final String? imageData;
   final File? originalImage;
+  final bool isSaved;
+  final bool isSaving;
+  final VoidCallback onFavoriteTap;
 
   const _GeneratedRoomImage({
     required this.imageData,
     required this.originalImage,
+    required this.isSaved,
+    required this.isSaving,
+    required this.onFavoriteTap,
   });
 
   @override
@@ -184,7 +207,21 @@ class _GeneratedRoomImageState extends State<_GeneratedRoomImage> {
             right: 10,
             child: Row(
               children: [
-                _RoundIconButton(icon: Icons.favorite_border_rounded, onTap: () {}),
+                widget.isSaving
+                    ? const Padding(
+                        padding: EdgeInsets.all(7),
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : _RoundIconButton(
+                        icon: widget.isSaved
+                            ? Icons.favorite_rounded
+                            : Icons.favorite_border_rounded,
+                        onTap: widget.isSaved ? () {} : widget.onFavoriteTap,
+                      ),
                 const SizedBox(width: 8),
                 _RoundIconButton(icon: Icons.ios_share_rounded, onTap: () {}),
               ],

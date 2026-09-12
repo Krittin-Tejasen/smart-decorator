@@ -65,10 +65,6 @@ class _ProcessingScreenState
             .read(processingProvider.notifier)
             .completeProcessing();
 
-        ref
-            .read(appStateProvider.notifier)
-            .saveToHistory();
-
         if (mounted) {
           context.go('/results');
         }
