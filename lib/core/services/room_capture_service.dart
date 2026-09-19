@@ -142,7 +142,7 @@ class RoomCaptureService {
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────────────────────────
 
   String _buildStoragePath(String capturedAt) {
     final ms = DateTime.tryParse(capturedAt)?.millisecondsSinceEpoch
