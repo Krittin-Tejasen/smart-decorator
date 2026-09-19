@@ -1,21 +1,21 @@
-import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../shared/providers/app_state_provider.dart';
 
-class ScanResultScreen extends StatefulWidget {
+class ScanResultScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> data;
   const ScanResultScreen({super.key, required this.data});
 
   @override
-  State<ScanResultScreen> createState() => _ScanResultScreenState();
+  ConsumerState<ScanResultScreen> createState() => _ScanResultScreenState();
 }
 
-class _ScanResultScreenState extends State<ScanResultScreen> {
-  bool _saved = false;
-  String? _savedPath;
+class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
+  bool _saving = false;
 
   // ── Compute room dimensions from XZ floor-plan points ──────────────────
 
@@ -54,43 +54,64 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
     );
   }
 
-  // ── Save scan to local JSON file ────────────────────────────────────────
+  // ── Save scan to Supabase only ───────────────────────────────────────────
 
-  Future<void> _saveLocally() async {
-    final points = (widget.data['floorPlanPoints'] as List?)
-            ?.cast<Map>()
-            .toList() ??
-        [];
-    final snapshot = widget.data['snapshot'] as Map<String, dynamic>?;
+  Future<void> _saveAndDone() async {
+    setState(() => _saving = true);
 
-    final ceilingY = widget.data['ceilingY'];
-    final floorY   = widget.data['floorY'];
-    final height   = (ceilingY != null && floorY != null)
+    final snapshot  = widget.data['snapshot'] as Map<String, dynamic>?;
+    final ceilingY  = widget.data['ceilingY'];
+    final floorY    = widget.data['floorY'];
+    final height    = (ceilingY != null && floorY != null)
         ? ((ceilingY as num) - (floorY as num)).abs()
         : null;
 
-    final saveData = {
-      'savedAt': DateTime.now().toIso8601String(),
-      'cornerCount': widget.data['cornerCount'],
-      'captureMode': snapshot?['captureMode'] ?? 'standard',
-      'floorPlanPoints': points,
-      'ceilingY': ceilingY,
-      'floorY': floorY,
-      'heightMeters': height,
-      'hasDepthMap': snapshot?['depthMapPng'] != null,
-      'hasMeshAnchors': (snapshot?['meshAnchors'] as List?)?.isNotEmpty == true,
-      'snapshot': snapshot,
+    final spatialData = {
+      'captureMode':     snapshot?['captureMode'] ?? 'standard',
+      'cornerCount':     widget.data['cornerCount'],
+      'floorPlanPoints': widget.data['floorPlanPoints'],
+      'ceilingY':        ceilingY,
+      'floorY':          floorY,
+      'heightMeters':    height,
+      'hasDepthMap':     snapshot?['depthMapPng'] != null,
+      'hasMeshAnchors':  (snapshot?['meshAnchors'] as List?)?.isNotEmpty == true,
+      'meshAnchors':     snapshot?['meshAnchors'],
     };
 
-    final dir = await getApplicationDocumentsDirectory();
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    final file = File('${dir.path}/scan_$ts.json');
-    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(saveData));
+    final identityMatrix = [
+      1.0, 0.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, 0.0, 1.0,
+    ];
 
-    setState(() {
-      _saved = true;
-      _savedPath = file.path;
-    });
+    try {
+      final db = Supabase.instance.client;
+      await db.from('room_captures').insert({
+        'user_id':           db.auth.currentUser?.id,
+        'image_url':         null,
+        'platform':          'ios',
+        'camera_extrinsics': {'matrix': identityMatrix, 'note': 'lidar_scan_no_photo'},
+        'camera_intrinsics': {'matrix': List.filled(9, 0.0), 'note': 'lidar_scan_no_photo'},
+        'spatial_data':      spatialData,
+      });
+      setState(() => _saving = false);
+      ref.read(appStateProvider.notifier).setScanCompleted();
+    } catch (e) {
+      setState(() => _saving = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Save failed: $e'),
+            backgroundColor: Colors.red.shade800,
+          ),
+        );
+      }
+      return;
+    }
+
+    // Navigate home after successful save
+    if (mounted) context.go('/home');
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────
@@ -137,14 +158,15 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
           children: [
 
             // ── Capture mode badge ─────────────────────────────────────
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 _Badge(
                   icon: isLidar ? Icons.radar : Icons.camera_alt,
                   label: isLidar ? 'LiDAR Scan' : 'AR Scan',
                   color: isLidar ? Colors.cyanAccent : Colors.orangeAccent,
                 ),
-                const SizedBox(width: 8),
                 if (hasDepth)
                   _Badge(
                     icon: Icons.layers,
@@ -152,13 +174,10 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                     color: Colors.purpleAccent,
                   ),
                 if ((meshAnchors?.length ?? 0) > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: _Badge(
-                      icon: Icons.grid_3x3,
-                      label: '${meshAnchors!.length} mesh anchors',
-                      color: Colors.greenAccent,
-                    ),
+                  _Badge(
+                    icon: Icons.grid_3x3,
+                    label: '${meshAnchors!.length} mesh anchors',
+                    color: Colors.greenAccent,
                   ),
               ],
             ),
@@ -235,67 +254,31 @@ class _ScanResultScreenState extends State<ScanResultScreen> {
                 '${(snapshot!['depthMinMeters'] as num).toStringAsFixed(2)} m  –  '
                 '${(snapshot['depthMaxMeters'] as num).toStringAsFixed(2)} m'),
 
-            // ── Save button ────────────────────────────────────────────
+            // ── Done button ────────────────────────────────────────────
             const SizedBox(height: 28),
-            if (!_saved)
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Colors.cyanAccent,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14)),
-                  ),
-                  icon: const Icon(Icons.save_alt),
-                  label: const Text('Save to Device',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  onPressed: _saveLocally,
-                ),
-              )
-            else ...[
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.green.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.4)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(children: [
-                      Icon(Icons.check_circle, color: Colors.greenAccent, size: 20),
-                      SizedBox(width: 8),
-                      Text('Saved to device',
-                          style: TextStyle(
-                              color: Colors.greenAccent,
-                              fontWeight: FontWeight.bold)),
-                    ]),
-                    const SizedBox(height: 6),
-                    Text(
-                      _savedPath ?? '',
-                      style: const TextStyle(color: Colors.white54, fontSize: 11),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-
-            const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white70,
-                  side: const BorderSide(color: Colors.white24),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.cyanAccent,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14)),
                 ),
-                onPressed: () => context.go('/home'),
-                child: const Text('Back to Home'),
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18, height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.black),
+                      )
+                    : const Icon(Icons.check_rounded),
+                label: Text(
+                  _saving ? 'Saving…' : 'Done',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                onPressed: _saving ? null : _saveAndDone,
               ),
             ),
             const SizedBox(height: 32),

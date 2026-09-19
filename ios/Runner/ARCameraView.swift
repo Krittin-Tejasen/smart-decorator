@@ -46,6 +46,7 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
             case "clearPoints":    self.clearAll(); result(nil)
             case "captureSnapshot":self.handleCaptureSnapshot(result: result)
             case "samplePoint":    self.handleSamplePoint(result: result)
+            case "capturePhoto":   self.handleCapturePhoto(result: result)
             case "getCapabilities":result(ARCapabilityService.toFlutterMap())
             default:               result(FlutterMethodNotImplemented)
             }
@@ -149,6 +150,72 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
             result(FlutterError(code: "SERIALISE_FAILED",
                                 message: error.localizedDescription, details: nil))
         }
+    }
+
+    // MARK: - AR photo capture (image + extrinsics + intrinsics)
+
+    private func handleCapturePhoto(result: @escaping FlutterResult) {
+        guard let frame = arView.session.currentFrame else {
+            result(FlutterError(code: "NO_FRAME", message: "No current AR frame", details: nil))
+            return
+        }
+
+        let pixelBuffer = frame.capturedImage
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let context = CIContext(options: nil)
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            result(FlutterError(code: "CONVERSION_FAILED", message: "Cannot convert pixel buffer to CGImage", details: nil))
+            return
+        }
+        let uiImage = UIImage(cgImage: cgImage)
+        guard let jpegData = uiImage.jpegData(compressionQuality: 0.85) else {
+            result(FlutterError(code: "JPEG_FAILED", message: "Cannot encode JPEG", details: nil))
+            return
+        }
+
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let ts = Int(Date().timeIntervalSince1970 * 1000)
+        let fileURL = docs.appendingPathComponent("ar_photo_\(ts).jpg")
+        do {
+            try jpegData.write(to: fileURL)
+        } catch {
+            result(FlutterError(code: "WRITE_FAILED", message: error.localizedDescription, details: nil))
+            return
+        }
+
+        // Camera-to-world transform (column-major 4×4)
+        let T = frame.camera.transform
+        let ext: [Double] = [
+            Double(T.columns.0.x), Double(T.columns.0.y), Double(T.columns.0.z), Double(T.columns.0.w),
+            Double(T.columns.1.x), Double(T.columns.1.y), Double(T.columns.1.z), Double(T.columns.1.w),
+            Double(T.columns.2.x), Double(T.columns.2.y), Double(T.columns.2.z), Double(T.columns.2.w),
+            Double(T.columns.3.x), Double(T.columns.3.y), Double(T.columns.3.z), Double(T.columns.3.w),
+        ]
+
+        // Camera intrinsics (row-major 3×3): [fx,0,cx, 0,fy,cy, 0,0,1]
+        // ARKit stores K column-major: cols.0=(fx,0,0), cols.1=(0,fy,0), cols.2=(cx,cy,1)
+        let K = frame.camera.intrinsics
+        let intr: [Double] = [
+            Double(K.columns.0.x), Double(K.columns.1.x), Double(K.columns.2.x),
+            Double(K.columns.0.y), Double(K.columns.1.y), Double(K.columns.2.y),
+            Double(K.columns.0.z), Double(K.columns.1.z), Double(K.columns.2.z),
+        ]
+
+        let imgW = CVPixelBufferGetWidth(pixelBuffer)
+        let imgH = CVPixelBufferGetHeight(pixelBuffer)
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        result([
+            "imagePath":  fileURL.path,
+            "extrinsics": ext,
+            "intrinsics": intr,
+            "imageWidth":  imgW,
+            "imageHeight": imgH,
+            "platform":   "ios",
+            "capturedAt": iso.string(from: Date()),
+        ] as [String: Any])
     }
 
     // MARK: - LiDAR depth point sampling

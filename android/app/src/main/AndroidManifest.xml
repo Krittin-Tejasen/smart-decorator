@@ -30,6 +30,17 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- ARCore: "optional" means the app works without ARCore but uses it when present. -->
+        <meta-data android:name="com.google.ar.core" android:value="optional" />
+
+        <!-- AR photo capture Activity (launched by ARCoreCapturePlugin) -->
+        <activity
+            android:name=".ARCoreCaptureActivity"
+            android:exported="false"
+            android:configChanges="orientation|keyboardHidden|screenSize"
+            android:screenOrientation="locked"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
