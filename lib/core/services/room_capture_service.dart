@@ -152,7 +152,7 @@ class RoomCaptureService {
   }
 
   /// Extracts the object path from a Supabase public URL.
-  /// URL format: .../storage/v1/object/public/room_images/<path>
+  /// URL format: .../storage/v1/object/public/room_images/{object-path}
   String? _pathFromPublicUrl(String url) {
     final marker = '/room-images/';
     final idx = url.indexOf(marker);
