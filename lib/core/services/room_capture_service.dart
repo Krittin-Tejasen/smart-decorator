@@ -18,7 +18,7 @@ class RoomCaptureService {
 
   SupabaseClient get _db => Supabase.instance.client;
 
-  // ── Public API ────────────────────────────────────────────────────────────
+  // ── Public API ───────────────────────────────────────────────────────────
 
   /// Full save: upload JPEG → get public URL → insert row.
   ///
@@ -142,7 +142,7 @@ class RoomCaptureService {
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────
 
   String _buildStoragePath(String capturedAt) {
     final ms = DateTime.tryParse(capturedAt)?.millisecondsSinceEpoch
@@ -152,7 +152,7 @@ class RoomCaptureService {
   }
 
   /// Extracts the object path from a Supabase public URL.
-  /// URL format: .../storage/v1/object/public/room_images/{object-path}
+  /// URL format: .../storage/v1/object/public/room-images/{path}
   String? _pathFromPublicUrl(String url) {
     final marker = '/room-images/';
     final idx = url.indexOf(marker);
@@ -161,7 +161,7 @@ class RoomCaptureService {
   }
 }
 
-// ── Supporting types ──────────────────────────────────────────────────────────
+// ── Supporting types ───────────────────────────────────────────────────────
 
 class RoomCaptureSummary {
   final String id;
