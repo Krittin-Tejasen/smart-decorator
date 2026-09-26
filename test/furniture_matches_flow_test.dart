@@ -118,6 +118,16 @@ void main() {
       expect(find.byKey(const ValueKey('furniture-cutout')), findsNothing);
     });
 
+    testWidgets('the results image has no heart button (saving is "Save Room Data")', (tester) async {
+      usePhone(tester);
+      await tester.pumpWidget(appWith([furniture('sofa')]));
+      await settle(tester);
+
+      expect(find.byIcon(Icons.favorite_border_rounded), findsNothing);
+      expect(find.byIcon(Icons.favorite_rounded), findsNothing);
+      expect(find.byIcon(Icons.ios_share_rounded), findsOneWidget, reason: 'only the heart is hidden');
+    });
+
     testWidgets('an item with no image at all still gets a card with an icon', (tester) async {
       usePhone(tester);
       await tester.pumpWidget(appWith([furniture('vase', cutout: false, crop: false)]));
