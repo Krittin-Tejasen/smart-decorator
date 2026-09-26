@@ -10,6 +10,7 @@ import '../models/product.dart';
 import '../models/design_history.dart';
 import '../models/generate_room_request.dart';
 import '../models/ai_model.dart';
+import '../models/generation_progress.dart';
 
 import '../../core/services/ai_generation_service.dart';
 
@@ -212,7 +213,14 @@ class AppStateNotifier
     );
   }
 
-  Future<void> generateRoomDesign() async {
+  /// Generates the design as a backend job. [onProgress] is called with what
+  /// the backend is really doing (stage + status text) while it runs;
+  /// cancelling [cancelToken] stops the job. Throws [GenerationCancelled]
+  /// when cancelled.
+  Future<void> generateRoomDesign({
+    void Function(GenerationProgress progress)? onProgress,
+    GenerationCancelToken? cancelToken,
+  }) async {
     if (
       state.selectedRoomType == null ||
       state.selectedStyle == null ||
@@ -232,7 +240,11 @@ class AppStateNotifier
 
     final aiService = AIGenerationService();
 
-    final response = await aiService.generateRoom(request);
+    final response = await aiService.generateRoomWithProgress(
+      request,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
 
     state = state.copyWith(
       generatedRoomImage: response.generatedImage,
