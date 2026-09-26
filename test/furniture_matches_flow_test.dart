@@ -8,6 +8,7 @@ import 'package:smart_decorator/core/services/product_match_service.dart';
 import 'package:smart_decorator/features/results/presentation/furniture_matches_screen.dart';
 import 'package:smart_decorator/features/results/presentation/results_screen.dart';
 import 'package:smart_decorator/features/results/providers/furniture_matches_provider.dart';
+import 'package:smart_decorator/features/results/widgets/furniture_image.dart';
 import 'package:smart_decorator/features/results/widgets/furniture_segment_card.dart';
 import 'package:smart_decorator/routes/app_router.dart';
 import 'package:smart_decorator/shared/models/furniture_item.dart';
@@ -103,7 +104,9 @@ void main() {
       expect(find.text('Coffee Table'), findsOneWidget);
     });
 
-    testWidgets('shows the cut-out when there is one, otherwise the crop', (tester) async {
+    testWidgets("shows each item's rectangle crop, even when a cut-out exists", (tester) async {
+      // The cut-out (SAM 2 mask) comes out in pieces for big or partly hidden
+      // items like a sofa or a rug, so the app shows the plain photo crop.
       usePhone(tester);
       await tester.pumpWidget(appWith([
         furniture('sofa'),
@@ -111,8 +114,8 @@ void main() {
       ]));
       await settle(tester);
 
-      expect(find.byKey(const ValueKey('furniture-cutout')), findsOneWidget);
-      expect(find.byKey(const ValueKey('furniture-crop')), findsOneWidget);
+      expect(find.byKey(const ValueKey('furniture-crop')), findsNWidgets(2));
+      expect(find.byKey(const ValueKey('furniture-cutout')), findsNothing);
     });
 
     testWidgets('an item with no image at all still gets a card with an icon', (tester) async {
@@ -130,6 +133,41 @@ void main() {
     });
   });
 
+  group('FurnitureImage', () {
+    Widget host(FurnitureItem item, {bool preferCutout = false}) => MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 120,
+              height: 120,
+              child: FurnitureImage(item: item, preferCutout: preferCutout),
+            ),
+          ),
+        );
+
+    testWidgets('shows the crop by default', (tester) async {
+      await tester.pumpWidget(host(furniture('sofa')));
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('furniture-crop')), findsOneWidget);
+      expect(find.byKey(const ValueKey('furniture-cutout')), findsNothing);
+    });
+
+    testWidgets('shows the cut-out when asked to and one exists', (tester) async {
+      await tester.pumpWidget(host(furniture('sofa'), preferCutout: true));
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('furniture-cutout')), findsOneWidget);
+      expect(find.byKey(const ValueKey('furniture-crop')), findsNothing);
+    });
+
+    testWidgets('asked for a cut-out it does not have, it falls back to the crop', (tester) async {
+      await tester.pumpWidget(host(furniture('rug', cutout: false), preferCutout: true));
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('furniture-crop')), findsOneWidget);
+    });
+  });
+
   group('tapping a card opens that item\'s matching products', () {
     testWidgets('shows the item, a clear sample-data notice and three numbered products', (tester) async {
       usePhone(tester);
@@ -144,7 +182,7 @@ void main() {
       expect(find.descendant(of: page, matching: find.text('Sofa')), findsNWidgets(2),
           reason: 'app bar title + header');
       expect(find.text('Detected in your design'), findsOneWidget);
-      expect(find.descendant(of: page, matching: find.byKey(const ValueKey('furniture-cutout'))), findsOneWidget);
+      expect(find.descendant(of: page, matching: find.byKey(const ValueKey('furniture-crop'))), findsOneWidget);
 
       // it is obvious this is not real matching
       expect(find.text('Matching products'), findsOneWidget);

@@ -22,17 +22,22 @@ Uint8List? decodeDataUrl(String? dataUrl) {
 
 /// A detected furniture item on the app's sand-coloured tile.
 ///
-/// When the backend produced a real mask the item is shown cut out of the room
-/// (like a product photo); otherwise the rectangular crop is shown instead.
+/// By default the item's rectangular crop (its bounding box, background kept)
+/// fills the tile. The cut-out (transparent background, from the SAM 2 mask) is
+/// available with [preferCutout], but the app doesn't use it: on large or
+/// partly hidden pieces (a sofa behind a coffee table, a rug) the mask comes
+/// out with holes or in pieces and looks worse than the plain photo crop.
 /// Fills whatever space it is given.
 class FurnitureImage extends StatefulWidget {
   final FurnitureItem item;
   final double borderRadius;
+  final bool preferCutout;
 
   const FurnitureImage({
     super.key,
     required this.item,
     this.borderRadius = 10,
+    this.preferCutout = false,
   });
 
   @override
@@ -52,12 +57,15 @@ class _FurnitureImageState extends State<FurnitureImage> {
   @override
   void didUpdateWidget(FurnitureImage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.item, widget.item)) _decode();
+    if (!identical(oldWidget.item, widget.item) ||
+        oldWidget.preferCutout != widget.preferCutout) {
+      _decode();
+    }
   }
 
   // Decoded once per item, not on every rebuild.
   void _decode() {
-    _cutout = decodeDataUrl(widget.item.cutoutImage);
+    _cutout = widget.preferCutout ? decodeDataUrl(widget.item.cutoutImage) : null;
     _crop = decodeDataUrl(widget.item.cropImage);
   }
 
