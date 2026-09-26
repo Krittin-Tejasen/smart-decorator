@@ -37,6 +37,19 @@ def png_data_url() -> str:
 
 COMPOSE = patch.object(generation, "compose_design_prompt", new=AsyncMock(return_value="A calm room."))
 
+_no_db_write = patch.object(generation, "save_generated_design", new=lambda **_kwargs: None)
+
+
+def setUpModule():
+    # run_generate_room persists every result to Supabase (backend/db.py). If a
+    # developer's shell happens to have SUPABASE_* set, these tests must still
+    # never write rows or upload images.
+    _no_db_write.start()
+
+
+def tearDownModule():
+    _no_db_write.stop()
+
 
 class PipelineStageTests(unittest.IsolatedAsyncioTestCase):
     async def run_pipeline(self, **kwargs):
@@ -78,7 +91,7 @@ class PipelineStageTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(max(fractions), 1.0, "1.0 is reserved for the finished job")
 
     async def test_segment_stage_only_appears_when_requested(self):
-        fake_seg = SimpleNamespace(model_dump=lambda: {"items": [], "total": 0})
+        fake_seg = SimpleNamespace(items=[], model_dump=lambda: {"items": [], "total": 0})
         with COMPOSE, \
                 patch.object(generation, "generate_with_mock", new=AsyncMock(return_value=png_data_url())), \
                 patch.object(generation, "run_segmentation", new=AsyncMock(return_value=fake_seg)):
