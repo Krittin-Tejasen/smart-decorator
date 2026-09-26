@@ -52,8 +52,14 @@ class FurnitureItem {
   final double confidence;
   final BoundingBox bbox;
 
-  /// data:image/png;base64,... — cropped to the item's bounding box.
+  /// data:image/jpeg;base64,... — a thumbnail of the item's bounding box
+  /// (it still contains whatever surrounds the item in the room).
   final String cropImage;
+
+  /// data:image/png;base64,... — the item cut out of the room on a transparent
+  /// background, trimmed to the item. Null when the backend had no real mask
+  /// for it (then show [cropImage] instead).
+  final String? cutoutImage;
 
   /// data:image/png;base64,... — full-size binary mask.
   final String maskImage;
@@ -68,10 +74,13 @@ class FurnitureItem {
     required this.confidence,
     required this.bbox,
     required this.cropImage,
+    this.cutoutImage,
     required this.maskImage,
     required this.maskPrecise,
     required this.features,
   });
+
+  bool get hasCutout => cutoutImage != null && cutoutImage!.isNotEmpty;
 
   factory FurnitureItem.fromJson(Map<String, dynamic> json) {
     return FurnitureItem(
@@ -82,6 +91,7 @@ class FurnitureItem {
         json['bbox'] as Map<String, dynamic>? ?? const {},
       ),
       cropImage: json['crop_image'] as String? ?? '',
+      cutoutImage: _nonEmpty(json['cutout_image']),
       maskImage: json['mask_image'] as String? ?? '',
       maskPrecise: json['mask_precise'] as bool? ?? false,
       features: FurnitureFeatures.fromJson(
@@ -91,6 +101,9 @@ class FurnitureItem {
   }
 }
 
+String? _nonEmpty(Object? value) =>
+    value is String && value.isNotEmpty ? value : null;
+
 /// Mirrors backend/segmentation.py's `SegmentationResult`.
 class SegmentationResult {
   final List<FurnitureItem> items;
@@ -98,11 +111,16 @@ class SegmentationResult {
   final int total;
   final String method;
 
+  /// Why the local Grounding DINO + SAM 2 pipeline wasn't used (null when it
+  /// was). Non-null means the items only have rectangular boxes.
+  final String? fallbackReason;
+
   SegmentationResult({
     required this.items,
     required this.counts,
     required this.total,
     required this.method,
+    this.fallbackReason,
   });
 
   factory SegmentationResult.fromJson(Map<String, dynamic> json) {
@@ -122,6 +140,7 @@ class SegmentationResult {
           : {},
       total: (json['total'] as num?)?.toInt() ?? 0,
       method: json['method'] as String? ?? 'none',
+      fallbackReason: _nonEmpty(json['fallback_reason']),
     );
   }
 }
