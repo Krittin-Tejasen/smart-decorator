@@ -18,8 +18,12 @@ Image providers (chosen via AI_IMAGE_PROVIDER env var):
 import asyncio
 import base64
 import os
+import time
+import traceback
+import uuid
+from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -623,6 +627,15 @@ def mock_products() -> list[dict[str, Any]]:
     ]
 
 
+def _open_source_image(image_bytes: bytes) -> Image.Image:
+    try:
+        source_image = Image.open(BytesIO(image_bytes))
+        source_image.load()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.") from exc
+    return source_image
+
+
 @router.post("/generate-room")
 async def generate_room(
     room_type: str = Form(...),
@@ -635,12 +648,41 @@ async def generate_room(
     image_bytes = await image.read()
     mime_type = image.content_type or "image/png"
 
-    try:
-        source_image = Image.open(BytesIO(image_bytes))
-        source_image.load()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.") from exc
+    return await run_generate_room(
+        room_type, style, color, image_bytes, mime_type, segment=segment, provider=provider
+    )
 
+
+# (stage id, human-readable status, overall progress 0-1). The app shows the
+# message as-is and maps the stage to its checklist step.
+ProgressCallback = Callable[[str, str, float], None]
+
+
+async def run_generate_room(
+    room_type: str,
+    style: str,
+    color: str,
+    image_bytes: bytes,
+    mime_type: str,
+    segment: bool = False,
+    provider: str | None = None,
+    report: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """The whole generation pipeline: compose prompt -> generate -> critic
+    (+ retries) -> products -> optional segmentation.
+
+    `report(stage, message, progress)` is called as each stage really starts,
+    so a client polling a job (see /generate-room/jobs) can show what is
+    actually happening instead of a canned animation.
+    """
+
+    def progress(stage: str, message: str, fraction: float) -> None:
+        if report is not None:
+            report(stage, message, fraction)
+
+    source_image = _open_source_image(image_bytes)
+
+    progress("compose", "Analyzing your room and planning the design", 0.05)
     try:
         style_paragraph = await compose_design_prompt(
             room_type, style, color, image_bytes, mime_type
@@ -669,6 +711,7 @@ async def generate_room(
             detail=f"Unsupported AI_IMAGE_PROVIDER: {provider}",
         )
 
+    progress("generate", "Generating your new room design", 0.15)
     generated_image = await run_provider()
 
     # Critic Agent: the mock provider just watermarks the original photo, so
@@ -680,6 +723,7 @@ async def generate_room(
     # type/style. Each retry re-checks with the critic rather than assuming
     # the fix worked, since one correction pass doesn't always stick.
     if provider != "mock":
+        progress("critic", "Checking doors, windows and outlets are still in place", 0.65)
         gen_bytes, gen_mime = decode_data_url(generated_image)
         passed, verdict = await critique_generated_image(
             image_bytes, mime_type, gen_bytes, gen_mime, room_type, style, color
@@ -692,12 +736,16 @@ async def generate_room(
                 f"(of {CRITIC_MAX_RETRIES} retries allowed): {verdict}"
             )
             prompt = f"{prompt}{critic_retry_reminder(verdict)}"
+            retry_fraction = min(0.85, 0.65 + 0.05 * retries_used)
+            progress("retry", f"Refining the design (attempt {retries_used + 1})", retry_fraction)
             generated_image = await run_provider()
+            progress("critic", "Re-checking the refined design", retry_fraction + 0.02)
             gen_bytes, gen_mime = decode_data_url(generated_image)
             passed, verdict = await critique_generated_image(
                 image_bytes, mime_type, gen_bytes, gen_mime, room_type, style, color
             )
 
+    progress("match", "Finding matching products", 0.90)
     response: dict[str, Any] = {
         "generated_image": generated_image,
         "products": mock_products(),
@@ -705,6 +753,7 @@ async def generate_room(
 
     furniture_items: list[dict[str, Any]] = []
     if segment:
+        progress("segment", "Detecting furniture in the design", 0.93)
         _, encoded = generated_image.split(",", 1)
         gen_bytes = base64.b64decode(encoded)
         seg_result = await run_segmentation(gen_bytes, "image/png")
@@ -729,3 +778,144 @@ async def generate_room(
         response["design_id"] = design_id
 
     return response
+
+
+# ── Background jobs: start now, poll for real progress, cancel if wanted ────
+#
+# A single blocking POST hides everything that happens during a generation
+# (prompt composition, the image model, the critic and its retries), so the
+# app could only play a canned animation. Here the app starts a job, gets an
+# id back immediately, and polls GET /generate-room/jobs/{id} for the stage
+# the pipeline is *actually* in. DELETE cancels it, which also stops paying
+# for retries nobody is waiting for.
+#
+# Jobs live in this process's memory: fine for one uvicorn worker (dev / demo),
+# not for several workers or restarts - a deployed backend needs shared state
+# (Redis, a DB table) instead.
+
+_JOB_TTL_SECONDS = 15 * 60
+_MAX_JOBS = 50
+
+
+@dataclass
+class _Job:
+    id: str
+    created_at: float
+    status: str = "running"  # running | done | error | cancelled
+    stage: str = "queued"
+    message: str = "Starting"
+    progress: float = 0.0
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    finished_at: float | None = None
+    task: "asyncio.Task[None] | None" = field(default=None, repr=False)
+
+
+_jobs: dict[str, _Job] = {}
+
+
+def _purge_old_jobs(now: float) -> None:
+    """Drop finished jobs past their TTL, and the oldest finished ones if there
+    are too many. A finished job holds the whole generated image (~1-2 MB)."""
+    for job_id in [
+        j.id for j in _jobs.values()
+        if j.finished_at is not None and now - j.finished_at > _JOB_TTL_SECONDS
+    ]:
+        del _jobs[job_id]
+
+    if len(_jobs) >= _MAX_JOBS:
+        finished = sorted(
+            (j for j in _jobs.values() if j.finished_at is not None), key=lambda j: j.finished_at
+        )
+        for job in finished[: len(_jobs) - _MAX_JOBS + 1]:
+            del _jobs[job.id]
+
+
+async def _run_job(job: _Job, **pipeline_args: Any) -> None:
+    def report(stage: str, message: str, fraction: float) -> None:
+        job.stage = stage
+        job.message = message
+        job.progress = max(job.progress, fraction)  # never move backwards
+
+    try:
+        job.result = await run_generate_room(**pipeline_args, report=report)
+        job.stage, job.message, job.progress = "done", "Your room design is ready", 1.0
+        job.status = "done"
+    except asyncio.CancelledError:
+        job.status, job.message = "cancelled", "Cancelled"
+        raise
+    except HTTPException as exc:
+        job.status, job.error = "error", str(exc.detail)
+    except Exception as exc:
+        traceback.print_exc()
+        job.status, job.error = "error", f"{type(exc).__name__}: {exc}"
+    finally:
+        job.finished_at = time.time()
+
+
+@router.post("/generate-room/jobs", status_code=202)
+async def start_generate_room_job(
+    room_type: str = Form(...),
+    style: str = Form(...),
+    color: str = Form(...),
+    image: UploadFile = File(...),
+    segment: bool = Form(False),
+    provider: str | None = Form(None),
+):
+    image_bytes = await image.read()
+    mime_type = image.content_type or "image/png"
+
+    # Reject an unreadable upload right away rather than as a failed job.
+    _open_source_image(image_bytes)
+
+    now = time.time()
+    _purge_old_jobs(now)
+
+    job = _Job(id=uuid.uuid4().hex, created_at=now)
+    job.task = asyncio.create_task(
+        _run_job(
+            job,
+            room_type=room_type,
+            style=style,
+            color=color,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            segment=segment,
+            provider=provider,
+        )
+    )
+    _jobs[job.id] = job
+    return {"job_id": job.id}
+
+
+def _get_job_or_404(job_id: str) -> _Job:
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired job.")
+    return job
+
+
+@router.get("/generate-room/jobs/{job_id}")
+async def get_generate_room_job(job_id: str):
+    job = _get_job_or_404(job_id)
+    body: dict[str, Any] = {
+        "status": job.status,
+        "stage": job.stage,
+        "message": job.message,
+        "progress": round(job.progress, 3),
+    }
+    if job.status == "done":
+        body["result"] = job.result
+    if job.status == "error":
+        body["error"] = job.error
+    return body
+
+
+@router.delete("/generate-room/jobs/{job_id}")
+async def cancel_generate_room_job(job_id: str):
+    job = _get_job_or_404(job_id)
+    if job.status == "running" and job.task is not None:
+        job.task.cancel()
+        job.status, job.message = "cancelled", "Cancelled"
+        job.finished_at = time.time()
+    return {"status": job.status}

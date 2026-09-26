@@ -10,6 +10,7 @@ import '../models/product.dart';
 import '../models/generate_room_request.dart';
 import '../models/ai_model.dart';
 import '../models/furniture_item.dart';
+import '../models/generation_progress.dart';
 
 import '../../core/services/ai_generation_service.dart';
 import '../../core/services/design_save_service.dart';
@@ -247,7 +248,14 @@ class AppStateNotifier
     );
   }
 
-  Future<void> generateRoomDesign() async {
+  /// Generates the design as a backend job. [onProgress] is called with what
+  /// the backend is really doing (stage + status text) while it runs;
+  /// cancelling [cancelToken] stops the job. Throws [GenerationCancelled]
+  /// when cancelled.
+  Future<void> generateRoomDesign({
+    void Function(GenerationProgress progress)? onProgress,
+    GenerationCancelToken? cancelToken,
+  }) async {
     if (
       state.selectedRoomType == null ||
       state.selectedStyle == null ||
@@ -267,7 +275,11 @@ class AppStateNotifier
 
     final aiService = AIGenerationService();
 
-    final response = await aiService.generateRoom(request);
+    final response = await aiService.generateRoomWithProgress(
+      request,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
 
     // The backend already persisted this generation (is_saved=false) and
     // returned the new row's id — copyWith can't null out currentDesignId

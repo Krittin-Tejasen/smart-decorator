@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/ai_generation_service.dart';
 import '../../../core/widgets/app_icons.dart';
 import '../models/processing_step.dart';
 
@@ -25,6 +26,7 @@ class _ProcessingScreenState
     extends ConsumerState<ProcessingScreen> with TickerProviderStateMixin {
 
   bool _cancelled = false;
+  final GenerationCancelToken _cancelToken = GenerationCancelToken();
 
   late final AnimationController _rotationController;
   late final AnimationController _pulseController;
@@ -50,14 +52,16 @@ class _ProcessingScreenState
 
     Future.microtask(() async {
       try {
-        // Run the fake step choreography and the real backend request at the
-        // same time, so the progress UI keeps reflecting "still working" for
-        // however long the actual generation takes instead of sitting at
-        // 100% while the network call is still in flight.
-        await Future.wait([
-          ref.read(processingProvider.notifier).startProcessing(),
-          ref.read(appStateProvider.notifier).generateRoomDesign(),
-        ]);
+        // The backend reports the stage it is really in (reading the photo,
+        // generating, checking, retrying, ...); the steps, the ring and the
+        // status line all follow that instead of a canned animation.
+        await ref.read(appStateProvider.notifier).generateRoomDesign(
+          cancelToken: _cancelToken,
+          onProgress: (update) {
+            if (_cancelled || !mounted) return;
+            ref.read(processingProvider.notifier).applyProgress(update);
+          },
+        );
 
         if (_cancelled || !mounted) return;
 
@@ -85,11 +89,16 @@ class _ProcessingScreenState
 
   void _cancel() {
     _cancelled = true;
+    _cancelToken.cancel();
     context.go('/home');
   }
 
   @override
   void dispose() {
+    // Leaving this screen any other way (system back, ...) must also stop the
+    // backend job; after a normal finish this is a no-op.
+    _cancelled = true;
+    _cancelToken.cancel();
     _rotationController.dispose();
     _pulseController.dispose();
     super.dispose();
@@ -216,12 +225,23 @@ class _ProcessingScreenState
 
               const SizedBox(height: 6),
 
-              const Text(
-                'This may take a moment',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  color: AppColors.muted,
+              // What the backend is doing right now. Fixed height so a longer
+              // message wrapping onto a second line doesn't shove the rest of
+              // the screen around every time the status changes.
+              SizedBox(
+                key: const ValueKey('processing-status'),
+                height: 36,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: Text(
+                    processingState.statusMessage,
+                    key: ValueKey(processingState.statusMessage),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      color: AppColors.muted,
+                    ),
+                  ),
                 ),
               ),
 
