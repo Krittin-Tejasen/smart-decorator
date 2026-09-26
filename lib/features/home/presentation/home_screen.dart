@@ -33,7 +33,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> pickImage(WidgetRef ref) async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    // Downscaled at pick time: a phone photo is often 5-10 MB, and the photo is
+    // uploaded for every generation and stored (once per saved room). 1600 px on
+    // the long side is plenty for the AI and keeps each saved room small.
+    final pickedFile = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1600,
+      maxHeight: 1600,
+      imageQuality: 85,
+    );
     if (pickedFile != null) {
       ref.read(appStateProvider.notifier).setUploadedImage(File(pickedFile.path));
     }

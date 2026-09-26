@@ -1,24 +1,10 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../shared/models/furniture_item.dart';
-
-/// Bytes of a `data:image/...;base64,...` URL (or bare base64), or null if it
-/// is empty or not valid base64.
-Uint8List? decodeDataUrl(String? dataUrl) {
-  if (dataUrl == null || dataUrl.isEmpty) return null;
-  final payload = dataUrl.contains(',')
-      ? dataUrl.substring(dataUrl.indexOf(',') + 1)
-      : dataUrl;
-  try {
-    return base64Decode(payload);
-  } on FormatException {
-    return null;
-  }
-}
+import '../../../shared/utils/data_url.dart';
 
 /// A detected furniture item on the app's sand-coloured tile.
 ///
