@@ -173,11 +173,22 @@ curl -L -o checkpoints/sam2.1_hiera_small.pt \
 If you use a different checkpoint size, point `SAM2_MODEL_CFG` at the matching config
 (e.g. `configs/sam2.1/sam2.1_hiera_t.yaml` for the tiny checkpoint).
 
-Run the server:
+Run the server with `backend/run.ps1` (Windows) or `backend/run.sh` (macOS/Linux) — they
+always use `.venv` correctly regardless of your current directory, so the command never
+needs to change between pulls:
 
 ```bash
-uvicorn main:app --reload
+./run.ps1     # Windows: emulator/backend on the same machine
+./run.sh      # macOS/Linux: emulator/backend on the same machine
+
+./run.ps1 -Lan    # Windows: also reachable from a physical device on the LAN
+./run.sh --lan    # macOS/Linux: also reachable from a physical device on the LAN
 ```
+
+Testing on a physical device also needs `API_BASE_URL` set to this machine's LAN IP in
+`assets/.env` (gitignored — each person sets their own; see `assets/.env.example`). The
+Android emulator needs neither flag nor `API_BASE_URL` — it defaults to `10.0.2.2`, the
+alias for this machine's own `localhost`.
 
 Test segmentation against a local image:
 
