@@ -35,7 +35,13 @@ class AppState {
   /// Set alongside [uploadedImage] when the user takes a photo via AR Camera.
   final ARCaptureState? arCaptureState;
 
-  /// True after the user successfully completes and saves a room scan.
+  /// Spatial metadata from the last LiDAR room scan (floor plan, ceiling
+  /// height, mesh anchors, etc). Held in memory only — nothing is written to
+  /// Supabase until the user explicitly saves on the results screen.
+  final Map<String, dynamic>? scanSpatialData;
+
+  /// True after the user successfully completes a room scan (buffered, not
+  /// yet necessarily persisted).
   final bool scanCompleted;
 
   AppState({
@@ -48,8 +54,13 @@ class AppState {
     this.uploadedImage,
     this.selectedAiModel = AiModel.serverDefault,
     this.arCaptureState,
+    this.scanSpatialData,
     this.scanCompleted = false,
   });
+
+  /// True if there's any captured room data (photo spatial metadata or LiDAR
+  /// scan) sitting in the buffer, ready to be saved.
+  bool get hasUnsavedCapture => arCaptureState != null || scanSpatialData != null;
 
   AppState copyWith({
     RoomType? selectedRoomType,
@@ -61,6 +72,7 @@ class AppState {
     List<Product>? matchedProducts,
     AiModel? selectedAiModel,
     ARCaptureState? arCaptureState,
+    Map<String, dynamic>? scanSpatialData,
     bool? scanCompleted,
   }) {
     return AppState(
@@ -73,6 +85,7 @@ class AppState {
       uploadedImage:       uploadedImage       ?? this.uploadedImage,
       selectedAiModel:     selectedAiModel     ?? this.selectedAiModel,
       arCaptureState:      arCaptureState      ?? this.arCaptureState,
+      scanSpatialData:     scanSpatialData     ?? this.scanSpatialData,
       scanCompleted:       scanCompleted       ?? this.scanCompleted,
     );
   }
@@ -138,8 +151,30 @@ class AppStateNotifier
     state = state.copyWith(arCaptureState: arState);
   }
 
+  /// Buffers LiDAR scan spatial data in memory. Nothing is sent to Supabase
+  /// here — the results screen's Save button does that once, at the end.
+  void setScanSpatialData(Map<String, dynamic> data) {
+    state = state.copyWith(scanSpatialData: data);
+  }
+
   void setScanCompleted() {
     state = state.copyWith(scanCompleted: true);
+  }
+
+  /// Clears the buffered capture data after it's been successfully saved.
+  void clearCaptureBuffer() {
+    state = AppState(
+      selectedRoomType:    state.selectedRoomType,
+      selectedStyle:       state.selectedStyle,
+      selectedColorOption: state.selectedColorOption,
+      generatedRoomImage:  state.generatedRoomImage,
+      matchedProducts:     state.matchedProducts,
+      history:             state.history,
+      uploadedImage:       state.uploadedImage,
+      selectedAiModel:     state.selectedAiModel,
+      scanCompleted:       state.scanCompleted,
+      // arCaptureState + scanSpatialData intentionally dropped
+    );
   }
 
   void clearUploadedImage() {
