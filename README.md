@@ -122,6 +122,15 @@ matter — it only uploads a photo and downloads the JSON result. Speed depends 
 whatever machine is running `uvicorn`: a CUDA GPU there is fast, CPU-only works but is
 much slower (device is auto-detected, override with `SEGMENTATION_DEVICE`).
 
+Before they are returned, detections are cleaned up: Grounding DINO's glued-together
+labels ("armchair chair chair office chair") are reduced to one, doors/windows are
+dropped, the same object reported twice is de-duplicated, and items are sorted largest
+first. Each item carries a small `crop_image` (JPEG thumbnail of its bounding box) and,
+when the mask is a real SAM 2 mask, a `cutout_image` (transparent-background PNG trimmed
+to the item — `null` otherwise, in which case use `crop_image`). The result also has
+`method` and, if the local pipeline was skipped, `fallback_reason` — if that is not
+`null`, fix it first, the Gemini fallback only gives rectangles.
+
 Each result is returned in the HTTP response **and** written to disk as JSON under
 `backend/segmentation_results/` for reuse without re-running detection.
 
@@ -174,6 +183,12 @@ Test segmentation against a local image:
 
 ```bash
 python test_segmentation.py path/to/room.jpg
+```
+
+Unit tests for the clean-up logic (no models needed):
+
+```bash
+python -m unittest discover -s tests -v
 ```
 
 ## Getting Started
