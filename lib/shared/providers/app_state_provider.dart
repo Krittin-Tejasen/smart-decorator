@@ -9,6 +9,7 @@ import '../models/room_type.dart';
 import '../models/product.dart';
 import '../models/generate_room_request.dart';
 import '../models/ai_model.dart';
+import '../models/furniture_item.dart';
 
 import '../../core/services/ai_generation_service.dart';
 import '../../core/services/design_save_service.dart';
@@ -24,6 +25,10 @@ class AppState {
 
   final String? generatedRoomImage;
   final List<Product> matchedProducts;
+
+  /// Furniture pieces the backend segmented out of [generatedRoomImage] on
+  /// the last successful generation — one entry per detected item.
+  final List<FurnitureItem> segmentedFurniture;
 
   final File? uploadedImage;
 
@@ -57,6 +62,7 @@ class AppState {
     this.selectedColorOption,
     this.generatedRoomImage,
     this.matchedProducts = const [],
+    this.segmentedFurniture = const [],
     this.uploadedImage,
     this.selectedAiModel = AiModel.serverDefault,
     this.isSavingDesign = false,
@@ -78,6 +84,7 @@ class AppState {
     File? uploadedImage,
     String? generatedRoomImage,
     List<Product>? matchedProducts,
+    List<FurnitureItem>? segmentedFurniture,
     AiModel? selectedAiModel,
     bool? isSavingDesign,
     bool? designSaved,
@@ -101,6 +108,9 @@ class AppState {
 
       matchedProducts:
           matchedProducts ?? this.matchedProducts,
+
+      segmentedFurniture:
+          segmentedFurniture ?? this.segmentedFurniture,
 
       uploadedImage:
           uploadedImage ?? this.uploadedImage,
@@ -163,6 +173,7 @@ class AppStateNotifier
       selectedColorOption: null,
       generatedRoomImage: state.generatedRoomImage,
       matchedProducts: state.matchedProducts,
+      segmentedFurniture: state.segmentedFurniture,
       uploadedImage: state.uploadedImage,
       selectedAiModel: state.selectedAiModel,
       isSavingDesign: state.isSavingDesign,
@@ -209,6 +220,7 @@ class AppStateNotifier
       selectedColorOption: state.selectedColorOption,
       generatedRoomImage:  state.generatedRoomImage,
       matchedProducts:     state.matchedProducts,
+      segmentedFurniture:  state.segmentedFurniture,
       uploadedImage:       state.uploadedImage,
       selectedAiModel:     state.selectedAiModel,
       isSavingDesign:      state.isSavingDesign,
@@ -226,6 +238,7 @@ class AppStateNotifier
       selectedColorOption: state.selectedColorOption,
       generatedRoomImage: state.generatedRoomImage,
       matchedProducts: state.matchedProducts,
+      segmentedFurniture: state.segmentedFurniture,
       selectedAiModel: state.selectedAiModel,
       isSavingDesign: state.isSavingDesign,
       designSaved: state.designSaved,
@@ -267,6 +280,7 @@ class AppStateNotifier
       selectedColorOption: state.selectedColorOption,
       generatedRoomImage: response.generatedImage,
       matchedProducts: response.products,
+      segmentedFurniture: response.furnitureSegments?.items ?? const [],
       uploadedImage: state.uploadedImage,
       selectedAiModel: state.selectedAiModel,
       isSavingDesign: state.isSavingDesign,

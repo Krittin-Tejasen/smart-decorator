@@ -11,7 +11,7 @@ import '../../../core/services/room_capture_service.dart';
 import '../../../shared/providers/app_state_provider.dart';
 import '../../../shared/widgets/app_footer_nav.dart';
 
-import '../widgets/product_card.dart';
+import '../widgets/furniture_segment_card.dart';
 
 class ResultsScreen extends ConsumerStatefulWidget {
   const ResultsScreen({super.key});
@@ -81,7 +81,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
     final appState =
         ref.watch(appStateProvider);
 
-    final products = appState.matchedProducts;
+    final segmentedFurniture = appState.segmentedFurniture;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -149,7 +149,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
                     const Icon(Icons.sell_rounded, size: 15, color: AppColors.brassDeep),
                     const SizedBox(width: 6),
                     Text(
-                      '${products.length} Matching Product Found',
+                      '${segmentedFurniture.length} Furniture Detected',
                       style: const TextStyle(
                         color: AppColors.brassDeep,
                         fontSize: 12.5,
@@ -162,12 +162,12 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
 
               const SizedBox(height: 18),
 
-              if (products.isEmpty)
+              if (segmentedFurniture.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 30),
                   child: Center(
                     child: Text(
-                      'No matching products yet',
+                      'No furniture detected yet',
                       style: TextStyle(color: AppColors.muted),
                     ),
                   ),
@@ -176,7 +176,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
                 GridView.builder(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
-                  itemCount: products.length,
+                  itemCount: segmentedFurniture.length,
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 2,
                     mainAxisSpacing: 12,
@@ -184,7 +184,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
                     childAspectRatio: 0.92,
                   ),
                   itemBuilder: (context, index) {
-                    return ProductCard(product: products[index]);
+                    return FurnitureSegmentCard(item: segmentedFurniture[index]);
                   },
                 ),
 
