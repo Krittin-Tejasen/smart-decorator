@@ -7,11 +7,12 @@ import '../models/design_style.dart';
 import '../models/color_option.dart';
 import '../models/room_type.dart';
 import '../models/product.dart';
-import '../models/design_history.dart';
 import '../models/generate_room_request.dart';
 import '../models/ai_model.dart';
+import '../models/furniture_item.dart';
 
 import '../../core/services/ai_generation_service.dart';
+import '../../core/services/design_save_service.dart';
 
 
 class AppState {
@@ -25,11 +26,22 @@ class AppState {
   final String? generatedRoomImage;
   final List<Product> matchedProducts;
 
-  final List<DesignHistory> history;
+  /// Furniture pieces the backend segmented out of [generatedRoomImage] on
+  /// the last successful generation — one entry per detected item.
+  final List<FurnitureItem> segmentedFurniture;
 
   final File? uploadedImage;
 
   final AiModel selectedAiModel;
+
+  final bool isSavingDesign;
+  final bool designSaved;
+
+  // The row backend/db.py already created for the current generatedRoomImage
+  // (is_saved=false) — the favorite button flips that row's is_saved rather
+  // than creating a new one. The history screen reads saved rows straight
+  // from Supabase, not from anything held here.
+  final String? currentDesignId;
 
   /// Spatial metadata from the last AR photo capture.
   /// Set alongside [uploadedImage] when the user takes a photo via AR Camera.
@@ -50,9 +62,12 @@ class AppState {
     this.selectedColorOption,
     this.generatedRoomImage,
     this.matchedProducts = const [],
-    this.history = const [],
+    this.segmentedFurniture = const [],
     this.uploadedImage,
     this.selectedAiModel = AiModel.serverDefault,
+    this.isSavingDesign = false,
+    this.designSaved = false,
+    this.currentDesignId,
     this.arCaptureState,
     this.scanSpatialData,
     this.scanCompleted = false,
@@ -68,25 +83,58 @@ class AppState {
     ColorOption? selectedColorOption,
     File? uploadedImage,
     String? generatedRoomImage,
-    List<DesignHistory>? history,
     List<Product>? matchedProducts,
+    List<FurnitureItem>? segmentedFurniture,
     AiModel? selectedAiModel,
+    bool? isSavingDesign,
+    bool? designSaved,
+    String? currentDesignId,
     ARCaptureState? arCaptureState,
     Map<String, dynamic>? scanSpatialData,
     bool? scanCompleted,
   }) {
     return AppState(
-      selectedRoomType:    selectedRoomType    ?? this.selectedRoomType,
-      selectedStyle:       selectedStyle       ?? this.selectedStyle,
-      selectedColorOption: selectedColorOption ?? this.selectedColorOption,
-      generatedRoomImage:  generatedRoomImage  ?? this.generatedRoomImage,
-      matchedProducts:     matchedProducts     ?? this.matchedProducts,
-      history:             history             ?? this.history,
-      uploadedImage:       uploadedImage       ?? this.uploadedImage,
-      selectedAiModel:     selectedAiModel     ?? this.selectedAiModel,
-      arCaptureState:      arCaptureState      ?? this.arCaptureState,
-      scanSpatialData:     scanSpatialData     ?? this.scanSpatialData,
-      scanCompleted:       scanCompleted       ?? this.scanCompleted,
+      selectedRoomType:
+          selectedRoomType ?? this.selectedRoomType,
+
+      selectedStyle:
+          selectedStyle ?? this.selectedStyle,
+
+      selectedColorOption:
+          selectedColorOption ?? this.selectedColorOption,
+
+      generatedRoomImage:
+          generatedRoomImage ?? this.generatedRoomImage,
+
+      matchedProducts:
+          matchedProducts ?? this.matchedProducts,
+
+      segmentedFurniture:
+          segmentedFurniture ?? this.segmentedFurniture,
+
+      uploadedImage:
+          uploadedImage ?? this.uploadedImage,
+
+      selectedAiModel:
+          selectedAiModel ?? this.selectedAiModel,
+
+      isSavingDesign:
+          isSavingDesign ?? this.isSavingDesign,
+
+      designSaved:
+          designSaved ?? this.designSaved,
+
+      currentDesignId:
+          currentDesignId ?? this.currentDesignId,
+
+      arCaptureState:
+          arCaptureState ?? this.arCaptureState,
+
+      scanSpatialData:
+          scanSpatialData ?? this.scanSpatialData,
+
+      scanCompleted:
+          scanCompleted ?? this.scanCompleted,
     );
   }
 
@@ -125,9 +173,12 @@ class AppStateNotifier
       selectedColorOption: null,
       generatedRoomImage: state.generatedRoomImage,
       matchedProducts: state.matchedProducts,
-      history: state.history,
+      segmentedFurniture: state.segmentedFurniture,
       uploadedImage: state.uploadedImage,
       selectedAiModel: state.selectedAiModel,
+      isSavingDesign: state.isSavingDesign,
+      designSaved: state.designSaved,
+      currentDesignId: state.currentDesignId,
     );
   }
 
@@ -169,9 +220,12 @@ class AppStateNotifier
       selectedColorOption: state.selectedColorOption,
       generatedRoomImage:  state.generatedRoomImage,
       matchedProducts:     state.matchedProducts,
-      history:             state.history,
+      segmentedFurniture:  state.segmentedFurniture,
       uploadedImage:       state.uploadedImage,
       selectedAiModel:     state.selectedAiModel,
+      isSavingDesign:      state.isSavingDesign,
+      designSaved:         state.designSaved,
+      currentDesignId:     state.currentDesignId,
       scanCompleted:       state.scanCompleted,
       // arCaptureState + scanSpatialData intentionally dropped
     );
@@ -182,33 +236,14 @@ class AppStateNotifier
       selectedRoomType:    state.selectedRoomType,
       selectedStyle:       state.selectedStyle,
       selectedColorOption: state.selectedColorOption,
-      generatedRoomImage:  state.generatedRoomImage,
-      matchedProducts:     state.matchedProducts,
-      history:             state.history,
-      selectedAiModel:     state.selectedAiModel,
+      generatedRoomImage: state.generatedRoomImage,
+      matchedProducts: state.matchedProducts,
+      segmentedFurniture: state.segmentedFurniture,
+      selectedAiModel: state.selectedAiModel,
+      isSavingDesign: state.isSavingDesign,
+      designSaved: state.designSaved,
+      currentDesignId: state.currentDesignId,
       // arCaptureState intentionally cleared alongside image
-    );
-  }
-
-  void saveToHistory() {
-    if(
-      state.selectedRoomType == null ||
-      state.selectedStyle == null ||
-      state.generatedRoomImage == null
-    ){
-      return ;
-    }
-    final historyItem = DesignHistory(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      roomType: state.selectedRoomType!.title,
-      style: state.selectedStyle!.title,
-      imagePath: state.generatedRoomImage!,
-      products: state.matchedProducts,
-      createdAt: DateTime.now(),
-    );
-
-    state = state.copyWith(
-      history: [historyItem, ...state.history],
     );
   }
 
@@ -234,10 +269,45 @@ class AppStateNotifier
 
     final response = await aiService.generateRoom(request);
 
-    state = state.copyWith(
+    // The backend already persisted this generation (is_saved=false) and
+    // returned the new row's id — copyWith can't null out currentDesignId
+    // (its ?? pattern keeps the old value), so assign it directly here to
+    // make sure a generation that failed to persist doesn't leave a stale
+    // id from a previous one pointing at the wrong row.
+    state = AppState(
+      selectedRoomType: state.selectedRoomType,
+      selectedStyle: state.selectedStyle,
+      selectedColorOption: state.selectedColorOption,
       generatedRoomImage: response.generatedImage,
       matchedProducts: response.products,
+      segmentedFurniture: response.furnitureSegments?.items ?? const [],
+      uploadedImage: state.uploadedImage,
+      selectedAiModel: state.selectedAiModel,
+      isSavingDesign: state.isSavingDesign,
+      designSaved: false,
+      currentDesignId: response.designId,
     );
+  }
+
+  /// Flips the current design's `is_saved` flag to true — that's what the
+  /// history screen reads. The row itself was already created by the
+  /// backend when the design was generated; this is a lightweight update,
+  /// not a re-upload.
+  Future<void> saveGeneratedDesignToSupabase() async {
+    final designId = state.currentDesignId;
+    if (state.isSavingDesign || state.designSaved || designId == null) {
+      return;
+    }
+
+    state = state.copyWith(isSavingDesign: true);
+
+    try {
+      await DesignSaveService().markDesignSaved(designId);
+      state = state.copyWith(isSavingDesign: false, designSaved: true);
+    } catch (_) {
+      state = state.copyWith(isSavingDesign: false);
+      rethrow;
+    }
   }
 
   void setFakeResults() {

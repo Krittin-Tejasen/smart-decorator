@@ -4,9 +4,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/constants/app_colors.dart';
-import '../../../shared/models/design_history.dart';
-import '../../../shared/providers/app_state_provider.dart';
+import '../../../core/services/design_save_service.dart';
+import '../../../shared/models/saved_design.dart';
 import '../../../shared/widgets/app_footer_nav.dart';
+
+/// Designs the user has favorited (room_designs.is_saved = true), newest
+/// first, each with a resolved signed URL for its generated image.
+final savedDesignsProvider =
+    FutureProvider.autoDispose<List<SavedDesign>>((ref) async {
+  final service = DesignSaveService();
+  final rows = await service.fetchSavedDesigns();
+
+  return Future.wait(rows.map((row) async {
+    final path = row['generated_image_path'] as String? ?? '';
+    final url = path.isEmpty ? '' : await service.getImageUrl(path);
+    return SavedDesign.fromRow(row, url);
+  }));
+});
 
 class HistoryScreen extends ConsumerWidget {
 
@@ -18,7 +32,7 @@ class HistoryScreen extends ConsumerWidget {
     WidgetRef ref,
   ) {
 
-    final history = ref.watch(appStateProvider).history;
+    final designsAsync = ref.watch(savedDesignsProvider);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -43,26 +57,27 @@ class HistoryScreen extends ConsumerWidget {
             color: AppColors.ink,
           ),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded, color: AppColors.ink),
+            onPressed: () => ref.invalidate(savedDesignsProvider),
+          ),
+        ],
       ),
 
-      body: history.isEmpty
-          ? const _EmptyHistory()
-          : ListView.builder(
-
-              padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
-
-              itemCount: history.length,
-
-              itemBuilder: (
-                context,
-                index,
-              ) {
-
-                final item = history[index];
-
-                return _HistoryCard(item: item);
-              },
-            ),
+      body: designsAsync.when(
+        data: (designs) => designs.isEmpty
+            ? const _EmptyHistory()
+            : ListView.builder(
+                padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
+                itemCount: designs.length,
+                itemBuilder: (context, index) {
+                  return _HistoryCard(item: designs[index]);
+                },
+              ),
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, _) => _HistoryError(message: '$error'),
+      ),
 
       bottomNavigationBar: const AppFooterNav(current: FooterTab.history),
     );
@@ -70,7 +85,7 @@ class HistoryScreen extends ConsumerWidget {
 }
 
 class _HistoryCard extends StatelessWidget {
-  final DesignHistory item;
+  final SavedDesign item;
   const _HistoryCard({required this.item});
 
   IconData get _roomIcon {
@@ -116,14 +131,25 @@ class _HistoryCard extends StatelessWidget {
 
       child: Row(
         children: [
-          Container(
-            width: 58,
-            height: 58,
-            decoration: BoxDecoration(
+          ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              width: 58,
+              height: 58,
               color: _tileColor,
-              borderRadius: BorderRadius.circular(14),
+              child: item.imageUrl.isEmpty
+                  ? Icon(_roomIcon, size: 26, color: _tileIconColor)
+                  : Image.network(
+                      item.imageUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) =>
+                          Icon(_roomIcon, size: 26, color: _tileIconColor),
+                      loadingBuilder: (context, child, progress) =>
+                          progress == null
+                              ? child
+                              : Icon(_roomIcon, size: 26, color: _tileIconColor),
+                    ),
             ),
-            child: Icon(_roomIcon, size: 26, color: _tileIconColor),
           ),
 
           const SizedBox(width: 14),
@@ -153,7 +179,7 @@ class _HistoryCard extends StatelessWidget {
                       fg: _tileIconColor,
                     ),
                     _Chip(
-                      label: '${item.products.length} Products Matched',
+                      label: '${item.furnitureCount} Furniture Detected',
                       bg: AppColors.brassTint,
                       fg: AppColors.brassDeep,
                     ),
@@ -230,7 +256,38 @@ class _EmptyHistory extends StatelessWidget {
               color: AppColors.ink,
             ),
           ),
+          const SizedBox(height: 6),
+          const Text(
+            'Tap the heart on a generated design to save it here',
+            style: TextStyle(fontSize: 12, color: AppColors.muted),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _HistoryError extends StatelessWidget {
+  final String message;
+  const _HistoryError({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline_rounded, size: 28, color: AppColors.muted),
+            const SizedBox(height: 10),
+            Text(
+              'Could not load history:\n$message',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+          ],
+        ),
       ),
     );
   }

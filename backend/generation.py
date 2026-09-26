@@ -25,6 +25,7 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 
+from db import save_generated_design
 from segmentation import run_segmentation
 
 router = APIRouter(tags=["generation"])
@@ -702,10 +703,29 @@ async def generate_room(
         "products": mock_products(),
     }
 
+    furniture_items: list[dict[str, Any]] = []
     if segment:
         _, encoded = generated_image.split(",", 1)
         gen_bytes = base64.b64decode(encoded)
         seg_result = await run_segmentation(gen_bytes, "image/png")
         response["furniture_segments"] = seg_result.model_dump()
+        furniture_items = [item.model_dump() for item in seg_result.items]
+
+    # Every generation gets persisted (is_saved=false) regardless of whether
+    # segmentation ran — the favorite button on the results screen is what
+    # later flips is_saved to true, which is what the history screen reads.
+    generated_bytes_for_save, _ = decode_data_url(generated_image)
+    design_id = await asyncio.to_thread(
+        save_generated_design,
+        room_type=room_type,
+        style=style,
+        color=color,
+        source_bytes=image_bytes,
+        source_mime=mime_type,
+        generated_bytes=generated_bytes_for_save,
+        furniture_items=furniture_items,
+    )
+    if design_id:
+        response["design_id"] = design_id
 
     return response
