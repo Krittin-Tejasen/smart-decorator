@@ -6,7 +6,6 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/models/ar_capture_state.dart';
-import '../../../core/services/room_capture_service.dart';
 import '../../../core/widgets/app_icons.dart';
 import '../../../screens/views/ar_photo_capture_view.dart';
 import '../../../shared/providers/app_state_provider.dart';
@@ -95,17 +94,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       fullscreenDialog: true),
                 );
                 if (result != null && context.mounted) {
-                  // Update local UI immediately
+                  // Buffer locally only — nothing is sent to Supabase until
+                  // the user taps Save on the final results screen.
                   ref.read(appStateProvider.notifier)
                     ..setUploadedImage(File(result.imagePath))
                     ..setARCaptureState(result);
-
-                  // Save photo + spatial data to Supabase in background
-                  RoomCaptureService().saveCapture(capture: result).then((saved) {
-                    debugPrint('Saved to Supabase: ${saved.id}');
-                  }).catchError((e) {
-                    debugPrint('Supabase save failed: $e');
-                  });
                 }
               },
             ),

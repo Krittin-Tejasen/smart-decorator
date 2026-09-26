@@ -6,22 +6,77 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/room_capture_service.dart';
 
 import '../../../shared/providers/app_state_provider.dart';
 import '../../../shared/widgets/app_footer_nav.dart';
 
 import '../widgets/product_card.dart';
 
-class ResultsScreen
-    extends ConsumerWidget {
-
+class ResultsScreen extends ConsumerStatefulWidget {
   const ResultsScreen({super.key});
 
   @override
-  Widget build(
-    BuildContext context,
-    WidgetRef ref,
-  ) {
+  ConsumerState<ResultsScreen> createState() => _ResultsScreenState();
+}
+
+class _ResultsScreenState extends ConsumerState<ResultsScreen> {
+  bool _saving = false;
+  bool _saved  = false;
+
+  Future<void> _saveCapture() async {
+    final appState = ref.read(appStateProvider);
+
+    if (!appState.hasUnsavedCapture) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No room scan or AR photo to save')),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    try {
+      final service = RoomCaptureService();
+      final arState = appState.arCaptureState;
+
+      if (arState != null) {
+        // Photo + spatial data together (merges LiDAR scan data if present too)
+        await service.saveCapture(
+          capture: arState,
+          spatialData: appState.scanSpatialData ?? const {},
+        );
+      } else if (appState.scanSpatialData != null) {
+        // LiDAR scan only, no photo was taken
+        await service.saveScanOnly(spatialData: appState.scanSpatialData!);
+      }
+
+      ref.read(appStateProvider.notifier).clearCaptureBuffer();
+
+      if (mounted) {
+        setState(() { _saving = false; _saved = true; });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Room data saved'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Save failed: $e'),
+            backgroundColor: Colors.red.shade800,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
 
     final appState =
         ref.watch(appStateProvider);
@@ -115,6 +170,35 @@ class ResultsScreen
                     return ProductCard(product: products[index]);
                   },
                 ),
+
+              if (appState.hasUnsavedCapture) ...[
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _saved ? AppColors.sage : AppColors.sageDeep,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                    icon: _saving
+                        ? const SizedBox(
+                            width: 18, height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : Icon(_saved ? Icons.check_circle : Icons.cloud_upload_rounded),
+                    label: Text(
+                      _saving ? 'Saving…' : (_saved ? 'Saved' : 'Save Room Data'),
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    onPressed: (_saving || _saved) ? null : _saveCapture,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
