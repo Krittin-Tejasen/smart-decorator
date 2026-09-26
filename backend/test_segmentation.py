@@ -65,11 +65,17 @@ def test_image(image_path: str) -> None:
             f"y({bbox['y_min']:.2f}–{bbox['y_max']:.2f})"
         )
 
-        # Save crop image
+        # Save crop image (a JPEG thumbnail of the bounding box)
         _, encoded = item["crop_image"].split(",", 1)
         crop_bytes = base64.b64decode(encoded)
-        crop_path = CROPS_DIR / f"{path.stem}_{item['id']}_{label}.png"
+        crop_path = CROPS_DIR / f"{path.stem}_{item['id']}_{label}.jpg"
         crop_path.write_bytes(crop_bytes)
+
+        # Save the transparent-background cut-out (only when SAM 2 gave a real mask)
+        if item.get("cutout_image"):
+            _, cutout_encoded = item["cutout_image"].split(",", 1)
+            cutout_path = CROPS_DIR / f"{path.stem}_{item['id']}_{label}_cutout.png"
+            cutout_path.write_bytes(base64.b64decode(cutout_encoded))
 
         # Save mask image (one mask per furniture item)
         _, mask_encoded = item["mask_image"].split(",", 1)
