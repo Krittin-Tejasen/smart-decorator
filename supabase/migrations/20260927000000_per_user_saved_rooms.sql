@@ -14,8 +14,10 @@
 --     max_saved_designs() rows (5). The limit lives in the database, so the app
 --     cannot be tricked into exceeding it. To change it later (paid tiers),
 --     edit max_saved_designs().
---   * Only the owner can read / upload / delete files under <their uid>/ in the
---     room-images bucket (private).
+--   * Only the owner can read / upload / delete their own files in the room-images
+--     bucket (private): under <their uid>/ and under captures/<their uid>/.
+--     The old open policies on that bucket ("public read", "anon upload for
+--     testing", "authenticated upload") are dropped.
 --   * room_captures (LiDAR / AR scan data) gets the same owner-only rules.
 --
 -- Rows written before this migration have no owner (user_id is null) and become
@@ -96,23 +98,57 @@ create policy sd_room_designs_delete_own on public.room_designs
   for delete to authenticated using (user_id = auth.uid());
 
 -- ── 4. Storage: room-images bucket, one folder per user ────────────────────
--- Files are stored as <auth.uid()>/<timestamp>/generated.png and source.jpg.
+-- Saved rooms:   <auth.uid()>/<timestamp>/generated.png and source.jpg
+-- AR photos:     captures/<auth.uid()>/<timestamp>.jpg   (RoomCaptureService)
+--
+-- inspect_policies.sql showed these leftovers on storage.objects, all for the
+-- room-images bucket. They are removed by name (only these three existed):
+--   "public read"            SELECT for role public -> anyone with the anon key,
+--                            which ships inside the app, could list and download
+--                            every room photo in a bucket that is meant to be private
+--   "anon upload for testing" INSERT for role anon  -> anyone, without logging in,
+--                            could upload files into the bucket
+--   "authenticated upload"    INSERT for authenticated (folder check on the path);
+--                            replaced by sd_room_images_insert_own below
+drop policy if exists "public read" on storage.objects;
+drop policy if exists "anon upload for testing" on storage.objects;
+drop policy if exists "authenticated upload" on storage.objects;
 
 drop policy if exists sd_room_images_select_own on storage.objects;
 drop policy if exists sd_room_images_insert_own on storage.objects;
 drop policy if exists sd_room_images_delete_own on storage.objects;
 
+-- Signed URLs (what the app uses to show images) still work: creating one needs
+-- the select policy below, opening one needs nothing.
 create policy sd_room_images_select_own on storage.objects
   for select to authenticated
-  using (bucket_id = 'room-images' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (
+    bucket_id = 'room-images'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or ((storage.foldername(name))[1] = 'captures' and (storage.foldername(name))[2] = auth.uid()::text)
+    )
+  );
 
 create policy sd_room_images_insert_own on storage.objects
   for insert to authenticated
-  with check (bucket_id = 'room-images' and (storage.foldername(name))[1] = auth.uid()::text);
+  with check (
+    bucket_id = 'room-images'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or ((storage.foldername(name))[1] = 'captures' and (storage.foldername(name))[2] = auth.uid()::text)
+    )
+  );
 
 create policy sd_room_images_delete_own on storage.objects
   for delete to authenticated
-  using (bucket_id = 'room-images' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (
+    bucket_id = 'room-images'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or ((storage.foldername(name))[1] = 'captures' and (storage.foldername(name))[2] = auth.uid()::text)
+    )
+  );
 
 -- ── 5. room_captures (LiDAR / AR scan data): owner only ────────────────────
 
