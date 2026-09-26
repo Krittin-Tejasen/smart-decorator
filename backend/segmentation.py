@@ -103,12 +103,12 @@ router = APIRouter(tags=["segmentation"])
 # trailing period.
 _FURNITURE_PROMPT = (
     "sofa . couch . armchair . chair . dining chair . office chair . stool . bench . ottoman . "
-    "coffee table . dining table . side table . end table . console table . desk . "
+    "coffee table . dining table . side table . console table . desk . "
     "bed . headboard . nightstand . dresser . wardrobe . bookshelf . bookcase . "
-    "cabinet . media console . "
+    "cabinet"
     "floor lamp . table lamp . pendant lamp . chandelier . "
     "rug . carpet . curtain . blinds . "
-    "plant . artwork . painting . mirror . vase . decoration . "
+    "plant pot . artwork . painting . mirror . vase . decoration . "
     # Decoys, not furniture: without them Grounding DINO forces a door onto the
     # nearest furniture word ("mirror") and a window onto "curtain". Giving it
     # the truthful label lets us drop those detections below. They're what the
