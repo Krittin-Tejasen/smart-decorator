@@ -105,7 +105,7 @@ _FURNITURE_PROMPT = (
     "sofa . couch . armchair . chair . dining chair . office chair . stool . bench . ottoman . "
     "coffee table . dining table . side table . end table . console table . desk . "
     "bed . headboard . nightstand . dresser . wardrobe . bookshelf . bookcase . "
-    "cabinet . tv stand . media console . "
+    "cabinet . media console . "
     "floor lamp . table lamp . pendant lamp . chandelier . "
     "rug . carpet . curtain . blinds . "
     "plant . artwork . painting . mirror . vase . decoration . "
