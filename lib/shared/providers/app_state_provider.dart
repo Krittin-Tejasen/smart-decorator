@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'dart:io';
 
+import '../../core/models/ar_capture_state.dart';
 import '../models/design_style.dart';
 import '../models/color_option.dart';
 import '../models/room_type.dart';
@@ -37,6 +38,12 @@ class AppState {
   // from Supabase, not from anything held here.
   final String? currentDesignId;
 
+  /// Spatial metadata from the last AR photo capture.
+  /// Set alongside [uploadedImage] when the user takes a photo via AR Camera.
+  final ARCaptureState? arCaptureState;
+
+  /// True after the user successfully completes and saves a room scan.
+  final bool scanCompleted;
 
   AppState({
     this.selectedRoomType,
@@ -49,6 +56,8 @@ class AppState {
     this.isSavingDesign = false,
     this.designSaved = false,
     this.currentDesignId,
+    this.arCaptureState,
+    this.scanCompleted = false,
   });
 
   AppState copyWith({
@@ -62,6 +71,8 @@ class AppState {
     bool? isSavingDesign,
     bool? designSaved,
     String? currentDesignId,
+    ARCaptureState? arCaptureState,
+    bool? scanCompleted,
   }) {
     return AppState(
       selectedRoomType:
@@ -93,6 +104,12 @@ class AppState {
 
       currentDesignId:
           currentDesignId ?? this.currentDesignId,
+
+      arCaptureState:
+          arCaptureState ?? this.arCaptureState,
+
+      scanCompleted:
+          scanCompleted ?? this.scanCompleted,
     );
   }
 
@@ -152,15 +169,21 @@ class AppStateNotifier
   }
 
   void setUploadedImage(File image) {
-    state = state.copyWith(
-      uploadedImage: image,
-    );
+    state = state.copyWith(uploadedImage: image);
+  }
+
+  void setARCaptureState(ARCaptureState arState) {
+    state = state.copyWith(arCaptureState: arState);
+  }
+
+  void setScanCompleted() {
+    state = state.copyWith(scanCompleted: true);
   }
 
   void clearUploadedImage() {
     state = AppState(
-      selectedRoomType: state.selectedRoomType,
-      selectedStyle: state.selectedStyle,
+      selectedRoomType:    state.selectedRoomType,
+      selectedStyle:       state.selectedStyle,
       selectedColorOption: state.selectedColorOption,
       generatedRoomImage: state.generatedRoomImage,
       matchedProducts: state.matchedProducts,
@@ -168,6 +191,7 @@ class AppStateNotifier
       isSavingDesign: state.isSavingDesign,
       designSaved: state.designSaved,
       currentDesignId: state.currentDesignId,
+      // arCaptureState intentionally cleared alongside image
     );
   }
 

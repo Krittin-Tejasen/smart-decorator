@@ -6,3 +6,8 @@ __pycache__/
 backend.env
 crops/
 segmentation_results/
+
+# Model checkpoints — too large for GitHub (100MB limit), download separately
+checkpoints/
+*.pt
+*.pth
