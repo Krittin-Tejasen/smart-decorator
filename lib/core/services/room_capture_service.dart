@@ -105,6 +105,35 @@ class RoomCaptureService {
     }
   }
 
+  /// Save a LiDAR scan with no accompanying photo (identity matrix used as a
+  /// placeholder for extrinsics/intrinsics since no camera frame was captured).
+  Future<RoomCaptureUploadResult> saveScanOnly({
+    required Map<String, dynamic> spatialData,
+    String platform = 'ios',
+  }) async {
+    const identityMatrix = [
+      1.0, 0.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, 0.0, 1.0,
+    ];
+
+    try {
+      final row = await _db.from(_table).insert({
+        'user_id': _db.auth.currentUser?.id,
+        'image_url': null,
+        'platform': platform,
+        'camera_extrinsics': {'matrix': identityMatrix, 'note': 'lidar_scan_no_photo'},
+        'camera_intrinsics': {'matrix': List.filled(9, 0.0), 'note': 'lidar_scan_no_photo'},
+        'spatial_data': spatialData,
+      }).select('id').single();
+
+      return RoomCaptureUploadResult(id: row['id'] as String, imageUrl: '');
+    } catch (e) {
+      throw RoomCaptureServiceException('Database insert failed: $e');
+    }
+  }
+
   /// Fetch all captures for the current user, newest first.
   Future<List<RoomCaptureSummary>> fetchHistory() async {
     final rows = await _db

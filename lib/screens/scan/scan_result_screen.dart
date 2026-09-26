@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../shared/providers/app_state_provider.dart';
 
 class ScanResultScreen extends ConsumerStatefulWidget {
@@ -15,7 +14,6 @@ class ScanResultScreen extends ConsumerStatefulWidget {
 }
 
 class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
-  bool _saving = false;
 
   // ── Compute room dimensions from XZ floor-plan points ──────────────────
 
@@ -54,11 +52,13 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
     );
   }
 
-  // ── Save scan to Supabase only ───────────────────────────────────────────
+  // ── Buffer scan data locally (no network) ───────────────────────────────
+  //
+  // Nothing is sent to Supabase here. Data is held in AppState until the
+  // user explicitly taps Save on the final results screen (after generate +
+  // segment + match), so scanning works fully offline.
 
-  Future<void> _saveAndDone() async {
-    setState(() => _saving = true);
-
+  void _confirmDone() {
     final snapshot  = widget.data['snapshot'] as Map<String, dynamic>?;
     final ceilingY  = widget.data['ceilingY'];
     final floorY    = widget.data['floorY'];
@@ -78,40 +78,11 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
       'meshAnchors':     snapshot?['meshAnchors'],
     };
 
-    final identityMatrix = [
-      1.0, 0.0, 0.0, 0.0,
-      0.0, 1.0, 0.0, 0.0,
-      0.0, 0.0, 1.0, 0.0,
-      0.0, 0.0, 0.0, 1.0,
-    ];
+    ref.read(appStateProvider.notifier)
+      ..setScanSpatialData(spatialData)
+      ..setScanCompleted();
 
-    try {
-      final db = Supabase.instance.client;
-      await db.from('room_captures').insert({
-        'user_id':           db.auth.currentUser?.id,
-        'image_url':         null,
-        'platform':          'ios',
-        'camera_extrinsics': {'matrix': identityMatrix, 'note': 'lidar_scan_no_photo'},
-        'camera_intrinsics': {'matrix': List.filled(9, 0.0), 'note': 'lidar_scan_no_photo'},
-        'spatial_data':      spatialData,
-      });
-      setState(() => _saving = false);
-      ref.read(appStateProvider.notifier).setScanCompleted();
-    } catch (e) {
-      setState(() => _saving = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Save failed: $e'),
-            backgroundColor: Colors.red.shade800,
-          ),
-        );
-      }
-      return;
-    }
-
-    // Navigate home after successful save
-    if (mounted) context.go('/home');
+    context.go('/home');
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────
@@ -266,19 +237,13 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14)),
                 ),
-                icon: _saving
-                    ? const SizedBox(
-                        width: 18, height: 18,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.black),
-                      )
-                    : const Icon(Icons.check_rounded),
-                label: Text(
-                  _saving ? 'Saving…' : 'Done',
-                  style: const TextStyle(
+                icon: const Icon(Icons.check_rounded),
+                label: const Text(
+                  'Done',
+                  style: TextStyle(
                       fontSize: 16, fontWeight: FontWeight.bold),
                 ),
-                onPressed: _saving ? null : _saveAndDone,
+                onPressed: _confirmDone,
               ),
             ),
             const SizedBox(height: 32),
