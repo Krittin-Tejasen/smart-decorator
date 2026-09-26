@@ -1,39 +1,27 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/product_match_service.dart';
 import '../../../shared/models/furniture_item.dart';
+import 'furniture_image.dart';
 
+/// One detected piece of furniture. Tapping it opens the page of products that
+/// match it ([onTap] overrides that, e.g. in tests).
 class FurnitureSegmentCard extends StatelessWidget {
 
   final FurnitureItem item;
+  final VoidCallback? onTap;
 
   const FurnitureSegmentCard({
     super.key,
     required this.item,
+    this.onTap,
   });
-
-  String get _label {
-    final raw = item.label.trim();
-    if (raw.isEmpty) return 'Item';
-    return raw
-        .split(RegExp(r'[\s_]+'))
-        .where((word) => word.isNotEmpty)
-        .map((word) => word[0].toUpperCase() + word.substring(1))
-        .join(' ');
-  }
 
   @override
   Widget build(BuildContext context) {
-
-    final base64Data = item.cropImage.contains(',')
-        ? item.cropImage.substring(item.cropImage.indexOf(',') + 1)
-        : item.cropImage;
-
     return Container(
-      padding: const EdgeInsets.all(10),
-
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
@@ -46,50 +34,53 @@ class FurnitureSegmentCard extends StatelessWidget {
         ],
       ),
 
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: AspectRatio(
-              aspectRatio: 1,
-              child: base64Data.isEmpty
-                  ? Container(
-                      color: AppColors.sandTint,
-                      child: const Icon(
-                        Icons.chair_rounded,
-                        size: 26,
-                        color: AppColors.muted,
-                      ),
-                    )
-                  : Image.memory(
-                      base64Decode(base64Data),
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => Container(
-                        color: AppColors.sandTint,
-                        child: const Icon(
-                          Icons.chair_rounded,
-                          size: 26,
-                          color: AppColors.muted,
+      // The ripple needs its own Material *above* the white decoration,
+      // otherwise the decoration paints over it and the tap looks dead.
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap ??
+              () => context.push('/furniture-matches', extra: item),
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // The grid fixes the card's height, so the image takes what is
+                // left after the label instead of forcing a square (which
+                // overflowed the card by several pixels).
+                Expanded(
+                  child: FurnitureImage(item: item),
+                ),
+
+                const SizedBox(height: 8),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        titleCase(item.label),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.ink,
                         ),
                       ),
                     ),
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      size: 16,
+                      color: AppColors.muted,
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-
-          const SizedBox(height: 8),
-
-          Text(
-            _label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-              color: AppColors.ink,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
