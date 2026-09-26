@@ -37,19 +37,6 @@ def png_data_url() -> str:
 
 COMPOSE = patch.object(generation, "compose_design_prompt", new=AsyncMock(return_value="A calm room."))
 
-_no_db_write = patch.object(generation, "save_generated_design", new=lambda **_kwargs: None)
-
-
-def setUpModule():
-    # run_generate_room persists every result to Supabase (backend/db.py). If a
-    # developer's shell happens to have SUPABASE_* set, these tests must still
-    # never write rows or upload images.
-    _no_db_write.start()
-
-
-def tearDownModule():
-    _no_db_write.stop()
-
 
 class PipelineStageTests(unittest.IsolatedAsyncioTestCase):
     async def run_pipeline(self, **kwargs):
