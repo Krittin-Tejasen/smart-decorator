@@ -1,7 +1,11 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
+backend.env
+crops/
+segmentation_results/
 
 # Model checkpoints — too large for GitHub (100MB limit), download separately
 checkpoints/
