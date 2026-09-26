@@ -162,6 +162,14 @@ void main() {
       expect(find.byKey(const ValueKey('furniture-cutout')), findsNothing);
     });
 
+    testWidgets('shows the whole crop (fit inside the tile), never cropping its sides off', (tester) async {
+      await tester.pumpWidget(host(furniture('sofa')));
+      await tester.pump();
+
+      final image = tester.widget<Image>(find.byKey(const ValueKey('furniture-crop')));
+      expect(image.fit, BoxFit.contain);
+    });
+
     testWidgets('shows the cut-out when asked to and one exists', (tester) async {
       await tester.pumpWidget(host(furniture('sofa'), preferCutout: true));
       await tester.pump();

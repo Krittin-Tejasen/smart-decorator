@@ -23,7 +23,9 @@ Uint8List? decodeDataUrl(String? dataUrl) {
 /// A detected furniture item on the app's sand-coloured tile.
 ///
 /// By default the item's rectangular crop (its bounding box, background kept)
-/// fills the tile. The cut-out (transparent background, from the SAM 2 mask) is
+/// is shown whole on the tile: scaled down to fit, never cropped, so a wide
+/// sofa or a tall lamp is seen full-length with sand-coloured space around it
+/// (filling the tile instead cut the sides off wide items). The cut-out (transparent background, from the SAM 2 mask) is
 /// available with [preferCutout], but the app doesn't use it: on large or
 /// partly hidden pieces (a sofa behind a coffee table, a rug) the mask comes
 /// out with holes or in pieces and looks worse than the plain photo crop.
@@ -88,12 +90,15 @@ class _FurnitureImageState extends State<FurnitureImage> {
         ),
       );
     } else if (_crop != null) {
-      content = Image.memory(
-        _crop!,
-        key: const ValueKey('furniture-crop'),
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        errorBuilder: (context, error, stackTrace) => _fallbackIcon(),
+      content = Padding(
+        padding: const EdgeInsets.all(8),
+        child: Image.memory(
+          _crop!,
+          key: const ValueKey('furniture-crop'),
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
+          errorBuilder: (context, error, stackTrace) => _fallbackIcon(),
+        ),
       );
     } else {
       content = _fallbackIcon();
