@@ -360,7 +360,11 @@ async def critique_generated_image(
 
 
 # How many times the Critic Agent gets to reject and force a regeneration
-# before we just accept whatever came out. 4 as of 2026-09-10 (was 3, 2, 1).
+# before we just accept whatever came out. 2 as of 2026-09-27 (user's call:
+# at most 3 image generations per request, worst case ~3x the cost of one,
+# instead of 5x). The experiment below explains why it was 4 before.
+#
+# History: 4 as of 2026-09-10 (was 3, 2, 1).
 # At 3: 11/12 case2+case4 chains eventually passed, 1/12 (a nightstand vs.
 # outlet placement conflict) still failed after all 3 retries - user asked
 # to push to 4 for the full-scale run to give that class of stubborn case
@@ -368,7 +372,7 @@ async def critique_generated_image(
 # condition by one more image-gen call - this is now a real cost driver,
 # not a rounding error, at full scope (see run_experiment_a.py's printed
 # estimate before spending).
-CRITIC_MAX_RETRIES = int(os.getenv("CRITIC_MAX_RETRIES", "4"))
+CRITIC_MAX_RETRIES = int(os.getenv("CRITIC_MAX_RETRIES", "2"))
 
 
 def critic_retry_reminder(verdict: str) -> str:

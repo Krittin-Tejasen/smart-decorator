@@ -8,6 +8,7 @@ patched out, so these never touch Gemini/Replicate and cost nothing.
 
 import asyncio
 import base64
+import os
 import sys
 import time
 import unittest
@@ -76,6 +77,33 @@ class PipelineStageTests(unittest.IsolatedAsyncioTestCase):
         fractions = [f for _, _, f in seen]
         self.assertEqual(fractions, sorted(fractions), "progress must never go backwards")
         self.assertLess(max(fractions), 1.0, "1.0 is reserved for the finished job")
+
+    async def test_a_critic_that_never_passes_stops_after_the_retry_limit(self):
+        critic = AsyncMock(return_value=(False, "the door is still covered"))
+        generate = AsyncMock(return_value=png_data_url())
+        with COMPOSE, \
+                patch.object(generation, "generate_with_gemini", new=generate), \
+                patch.object(generation, "critique_generated_image", new=critic), \
+                patch.object(generation, "CRITIC_MAX_RETRIES", 2):
+            result, seen = await self.run_pipeline(provider="gemini")
+
+        # one first attempt + two retries = three images, never more
+        self.assertEqual(generate.await_count, 3)
+        self.assertEqual(critic.await_count, 3)
+        self.assertEqual(
+            [s for s, _, _ in seen],
+            ["compose", "generate", "critic", "retry", "critic", "retry", "critic", "match"],
+        )
+        self.assertEqual(
+            [m for s, m, _ in seen if s == "retry"],
+            ["Refining the design (attempt 2)", "Refining the design (attempt 3)"],
+        )
+        self.assertTrue(result["generated_image"].startswith("data:image/png"),
+                        "the last attempt is still returned, not an error")
+
+    @unittest.skipIf(os.environ.get("CRITIC_MAX_RETRIES"), "the environment overrides the default")
+    def test_the_default_is_two_retries(self):
+        self.assertEqual(generation.CRITIC_MAX_RETRIES, 2)
 
     async def test_segment_stage_only_appears_when_requested(self):
         fake_seg = SimpleNamespace(items=[], model_dump=lambda: {"items": [], "total": 0})
