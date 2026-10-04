@@ -29,7 +29,6 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 
-from db import save_generated_design
 from segmentation import run_segmentation
 
 router = APIRouter(tags=["generation"])
@@ -361,7 +360,11 @@ async def critique_generated_image(
 
 
 # How many times the Critic Agent gets to reject and force a regeneration
-# before we just accept whatever came out. 4 as of 2026-09-10 (was 3, 2, 1).
+# before we just accept whatever came out. 2 as of 2026-09-27 (user's call:
+# at most 3 image generations per request, worst case ~3x the cost of one,
+# instead of 5x). The experiment below explains why it was 4 before.
+#
+# History: 4 as of 2026-09-10 (was 3, 2, 1).
 # At 3: 11/12 case2+case4 chains eventually passed, 1/12 (a nightstand vs.
 # outlet placement conflict) still failed after all 3 retries - user asked
 # to push to 4 for the full-scale run to give that class of stubborn case
@@ -369,7 +372,7 @@ async def critique_generated_image(
 # condition by one more image-gen call - this is now a real cost driver,
 # not a rounding error, at full scope (see run_experiment_a.py's printed
 # estimate before spending).
-CRITIC_MAX_RETRIES = int(os.getenv("CRITIC_MAX_RETRIES", "4"))
+CRITIC_MAX_RETRIES = int(os.getenv("CRITIC_MAX_RETRIES", "2"))
 
 
 def critic_retry_reminder(verdict: str) -> str:
@@ -751,32 +754,17 @@ async def run_generate_room(
         "products": mock_products(),
     }
 
-    furniture_items: list[dict[str, Any]] = []
     if segment:
         progress("segment", "Detecting furniture in the design", 0.93)
         _, encoded = generated_image.split(",", 1)
         gen_bytes = base64.b64decode(encoded)
         seg_result = await run_segmentation(gen_bytes, "image/png")
         response["furniture_segments"] = seg_result.model_dump()
-        furniture_items = [item.model_dump() for item in seg_result.items]
 
-    # Every generation gets persisted (is_saved=false) regardless of whether
-    # segmentation ran — the favorite button on the results screen is what
-    # later flips is_saved to true, which is what the history screen reads.
-    generated_bytes_for_save, _ = decode_data_url(generated_image)
-    design_id = await asyncio.to_thread(
-        save_generated_design,
-        room_type=room_type,
-        style=style,
-        color=color,
-        source_bytes=image_bytes,
-        source_mime=mime_type,
-        generated_bytes=generated_bytes_for_save,
-        furniture_items=furniture_items,
-    )
-    if design_id:
-        response["design_id"] = design_id
-
+    # Nothing is stored here. A generation only becomes a saved room when the
+    # user taps "Save Room Data" in the app, which uploads the images straight
+    # to Supabase under their own account (see supabase/migrations/). The
+    # backend used to store every generation (~1.8 MB each, saved or not).
     return response
 
 

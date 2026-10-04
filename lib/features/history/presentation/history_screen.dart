@@ -4,27 +4,55 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/constants/app_colors.dart';
-import '../../../core/services/design_save_service.dart';
+import '../../../core/services/design_repository.dart';
+import '../../../shared/models/design_labels.dart';
 import '../../../shared/models/saved_design.dart';
 import '../../../shared/widgets/app_footer_nav.dart';
-
-/// Designs the user has favorited (room_designs.is_saved = true), newest
-/// first, each with a resolved signed URL for its generated image.
-final savedDesignsProvider =
-    FutureProvider.autoDispose<List<SavedDesign>>((ref) async {
-  final service = DesignSaveService();
-  final rows = await service.fetchSavedDesigns();
-
-  return Future.wait(rows.map((row) async {
-    final path = row['generated_image_path'] as String? ?? '';
-    final url = path.isEmpty ? '' : await service.getImageUrl(path);
-    return SavedDesign.fromRow(row, url);
-  }));
-});
+import '../providers/history_providers.dart';
 
 class HistoryScreen extends ConsumerWidget {
 
   const HistoryScreen({super.key});
+
+  Future<void> _confirmAndDelete(
+    BuildContext context,
+    WidgetRef ref,
+    SavedDesign design,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete this room?'),
+        content: const Text(
+          'It is removed from your saved rooms, and its images are deleted.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await ref.read(designRepositoryProvider).delete(design);
+      ref.invalidate(savedDesignsProvider);
+      ref.invalidate(savedDesignFurnitureProvider(design));
+      messenger.showSnackBar(const SnackBar(content: Text('Room deleted')));
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not delete room: $e')),
+      );
+    }
+  }
 
   @override
   Widget build(
@@ -33,6 +61,7 @@ class HistoryScreen extends ConsumerWidget {
   ) {
 
     final designsAsync = ref.watch(savedDesignsProvider);
+    final limit = ref.watch(designRepositoryProvider).maxSavedDesigns;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -70,9 +99,30 @@ class HistoryScreen extends ConsumerWidget {
             ? const _EmptyHistory()
             : ListView.builder(
                 padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
-                itemCount: designs.length,
+                // One extra row on top: how full the saved rooms are.
+                itemCount: designs.length + 1,
                 itemBuilder: (context, index) {
-                  return _HistoryCard(item: designs[index]);
+                  if (index == 0) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12, left: 2),
+                      child: Text(
+                        '${designs.length} of $limit saved rooms',
+                        key: const ValueKey('saved-count'),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    );
+                  }
+
+                  final design = designs[index - 1];
+                  return _HistoryCard(
+                    item: design,
+                    onTap: () => context.push('/saved-design', extra: design),
+                    onDelete: () => _confirmAndDelete(context, ref, design),
+                  );
                 },
               ),
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -84,9 +134,16 @@ class HistoryScreen extends ConsumerWidget {
   }
 }
 
-class _HistoryCard extends StatelessWidget {
+class _HistoryCard extends ConsumerWidget {
   final SavedDesign item;
-  const _HistoryCard({required this.item});
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  const _HistoryCard({
+    required this.item,
+    required this.onTap,
+    required this.onDelete,
+  });
 
   IconData get _roomIcon {
     final key = item.roomType.toLowerCase();
@@ -112,10 +169,12 @@ class _HistoryCard extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final imageUrl = ref.watch(savedImageUrlProvider(item.generatedImagePath));
+    final icon = Icon(_roomIcon, size: 26, color: _tileIconColor);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
 
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -129,75 +188,85 @@ class _HistoryCard extends StatelessWidget {
         ],
       ),
 
-      child: Row(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Container(
-              width: 58,
-              height: 58,
-              color: _tileColor,
-              child: item.imageUrl.isEmpty
-                  ? Icon(_roomIcon, size: 26, color: _tileIconColor)
-                  : Image.network(
-                      item.imageUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) =>
-                          Icon(_roomIcon, size: 26, color: _tileIconColor),
-                      loadingBuilder: (context, child, progress) =>
-                          progress == null
-                              ? child
-                              : Icon(_roomIcon, size: 26, color: _tileIconColor),
-                    ),
-            ),
-          ),
-
-          const SizedBox(width: 14),
-
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      // The ripple needs a Material above the white decoration.
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+            child: Row(
               children: [
-                Text(
-                  item.roomType,
-                  style: const TextStyle(
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.ink,
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    width: 58,
+                    height: 58,
+                    color: _tileColor,
+                    child: imageUrl.when(
+                      data: (url) => Image.network(
+                        url,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Center(child: icon),
+                        loadingBuilder: (context, child, progress) =>
+                            progress == null ? child : Center(child: icon),
+                      ),
+                      loading: () => Center(child: icon),
+                      error: (error, stackTrace) => Center(child: icon),
+                    ),
                   ),
                 ),
 
-                const SizedBox(height: 6),
+                const SizedBox(width: 14),
 
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    _Chip(
-                      label: 'Style: ${item.style}',
-                      bg: _tileColor,
-                      fg: _tileIconColor,
-                    ),
-                    _Chip(
-                      label: '${item.furnitureCount} Furniture Detected',
-                      bg: AppColors.brassTint,
-                      fg: AppColors.brassDeep,
-                    ),
-                  ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        roomTypeTitle(item.roomType),
+                        style: const TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.ink,
+                        ),
+                      ),
+
+                      const SizedBox(height: 6),
+
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          _Chip(
+                            label: 'Style: ${styleTitle(item.style)}',
+                            bg: _tileColor,
+                            fg: _tileIconColor,
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 6),
+
+                      Text(
+                        formatSavedAt(item.createdAt),
+                        style: const TextStyle(fontSize: 11, color: AppColors.muted),
+                      ),
+                    ],
+                  ),
                 ),
 
-                const SizedBox(height: 6),
-
-                Text(
-                  item.createdAt.toString(),
-                  style: const TextStyle(fontSize: 11, color: AppColors.muted),
+                IconButton(
+                  key: ValueKey('delete-${item.id}'),
+                  tooltip: 'Delete',
+                  icon: const Icon(Icons.delete_outline_rounded, color: AppColors.muted),
+                  onPressed: onDelete,
                 ),
               ],
             ),
           ),
-
-          const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
-        ],
+        ),
       ),
     );
   }
@@ -258,7 +327,8 @@ class _EmptyHistory extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Tap the heart on a generated design to save it here',
+            'Tap Save Room Data on a generated design to save it here',
+            textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: AppColors.muted),
           ),
         ],

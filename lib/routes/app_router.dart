@@ -7,8 +7,10 @@ import '../features/processing/presentation/processing_screen.dart';
 import '../features/results/presentation/furniture_matches_screen.dart';
 import '../features/results/presentation/results_screen.dart';
 import '../shared/models/furniture_item.dart';
+import '../shared/models/saved_design.dart';
 import '../features/test/presentation/test_screen.dart';
 import '../features/history/presentation/history_screen.dart';
+import '../features/history/presentation/saved_design_screen.dart';
 
 import '../screens/scan/room_scanner_screen.dart';
 import '../screens/scan/scan_result_screen.dart';
@@ -34,22 +36,42 @@ final GoRoute furnitureMatchesRoute = GoRoute(
 Widget buildFurnitureMatchesPage(Object? extra) {
   return extra is FurnitureItem
       ? FurnitureMatchesScreen(item: extra)
-      : const _BackToResults();
+      : const _BackTo('/results');
 }
 
-class _BackToResults extends StatefulWidget {
-  const _BackToResults();
+/// A saved room opened from History. Same rule as above: the room travels as
+/// `extra`, and without one we go back to the list instead of crashing.
+final GoRoute savedDesignRoute = GoRoute(
+  path: '/saved-design',
+  redirect: (BuildContext context, GoRouterState state) =>
+      state.extra is SavedDesign ? null : '/history',
+  builder: (BuildContext context, GoRouterState state) =>
+      buildSavedDesignPage(state.extra),
+);
+
+Widget buildSavedDesignPage(Object? extra) {
+  return extra is SavedDesign
+      ? SavedDesignScreen(design: extra)
+      : const _BackTo('/history');
+}
+
+/// Immediately sends the user to [location]; the page a route builds when the
+/// object it needs (`extra`) is missing.
+class _BackTo extends StatefulWidget {
+  final String location;
+
+  const _BackTo(this.location);
 
   @override
-  State<_BackToResults> createState() => _BackToResultsState();
+  State<_BackTo> createState() => _BackToState();
 }
 
-class _BackToResultsState extends State<_BackToResults> {
+class _BackToState extends State<_BackTo> {
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.go('/results');
+      if (mounted) context.go(widget.location);
     });
   }
 
@@ -77,6 +99,7 @@ final GoRouter appRouter = GoRouter(
       builder: (BuildContext context, GoRouterState state) => const ResultsScreen(),
     ),
     furnitureMatchesRoute,
+    savedDesignRoute,
     GoRoute(
       path: '/history',
       builder: (BuildContext context, GoRouterState state) => const HistoryScreen(),

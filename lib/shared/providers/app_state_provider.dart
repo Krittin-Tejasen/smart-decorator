@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../../core/models/ar_capture_state.dart';
 import '../models/design_style.dart';
@@ -11,9 +12,11 @@ import '../models/generate_room_request.dart';
 import '../models/ai_model.dart';
 import '../models/furniture_item.dart';
 import '../models/generation_progress.dart';
+import '../models/saved_design.dart';
 
 import '../../core/services/ai_generation_service.dart';
-import '../../core/services/design_save_service.dart';
+import '../../core/services/design_repository.dart';
+import '../utils/data_url.dart';
 
 
 class AppState {
@@ -35,14 +38,12 @@ class AppState {
 
   final AiModel selectedAiModel;
 
+  /// True while "Save Room Data" is uploading the current room.
   final bool isSavingDesign;
-  final bool designSaved;
 
-  // The row backend/db.py already created for the current generatedRoomImage
-  // (is_saved=false) — the favorite button flips that row's is_saved rather
-  // than creating a new one. The history screen reads saved rows straight
-  // from Supabase, not from anything held here.
-  final String? currentDesignId;
+  /// True once the current generated room has been saved (reset by the next
+  /// generation), so the same result can't be saved twice.
+  final bool designSaved;
 
   /// Spatial metadata from the last AR photo capture.
   /// Set alongside [uploadedImage] when the user takes a photo via AR Camera.
@@ -68,7 +69,6 @@ class AppState {
     this.selectedAiModel = AiModel.serverDefault,
     this.isSavingDesign = false,
     this.designSaved = false,
-    this.currentDesignId,
     this.arCaptureState,
     this.scanSpatialData,
     this.scanCompleted = false,
@@ -89,7 +89,6 @@ class AppState {
     AiModel? selectedAiModel,
     bool? isSavingDesign,
     bool? designSaved,
-    String? currentDesignId,
     ARCaptureState? arCaptureState,
     Map<String, dynamic>? scanSpatialData,
     bool? scanCompleted,
@@ -125,9 +124,6 @@ class AppState {
       designSaved:
           designSaved ?? this.designSaved,
 
-      currentDesignId:
-          currentDesignId ?? this.currentDesignId,
-
       arCaptureState:
           arCaptureState ?? this.arCaptureState,
 
@@ -150,13 +146,37 @@ class AppState {
 
 }
 
+/// What a successful save reports back: the saved room and how full the
+/// user's saved rooms now are.
+class SaveRoomResult {
+  final SavedDesign design;
+  final int savedCount;
+  final int limit;
+
+  const SaveRoomResult({
+    required this.design,
+    required this.savedCount,
+    required this.limit,
+  });
+}
+
 class AppStateNotifier
   extends StateNotifier<AppState> {
 
-  AppStateNotifier():
+  AppStateNotifier({
+    DesignRepository Function()? repositoryFactory,
+    Future<Uint8List> Function(File file)? sourceReader,
+  }):
+    _repositoryFactory = repositoryFactory,
+    _readSource = sourceReader ?? ((file) => file.readAsBytes()),
     super(
       AppState(),
     );
+
+  final DesignRepository Function()? _repositoryFactory;
+
+  /// How the photo the room was made from is read for saving (a seam for tests).
+  final Future<Uint8List> Function(File file) _readSource;
 
   void selectRoomType(RoomType roomType) {
     state = state.copyWith(
@@ -179,7 +199,6 @@ class AppStateNotifier
       selectedAiModel: state.selectedAiModel,
       isSavingDesign: state.isSavingDesign,
       designSaved: state.designSaved,
-      currentDesignId: state.currentDesignId,
     );
   }
 
@@ -226,7 +245,6 @@ class AppStateNotifier
       selectedAiModel:     state.selectedAiModel,
       isSavingDesign:      state.isSavingDesign,
       designSaved:         state.designSaved,
-      currentDesignId:     state.currentDesignId,
       scanCompleted:       state.scanCompleted,
       // arCaptureState + scanSpatialData intentionally dropped
     );
@@ -243,7 +261,6 @@ class AppStateNotifier
       selectedAiModel: state.selectedAiModel,
       isSavingDesign: state.isSavingDesign,
       designSaved: state.designSaved,
-      currentDesignId: state.currentDesignId,
       // arCaptureState intentionally cleared alongside image
     );
   }
@@ -281,11 +298,9 @@ class AppStateNotifier
       cancelToken: cancelToken,
     );
 
-    // The backend already persisted this generation (is_saved=false) and
-    // returned the new row's id — copyWith can't null out currentDesignId
-    // (its ?? pattern keeps the old value), so assign it directly here to
-    // make sure a generation that failed to persist doesn't leave a stale
-    // id from a previous one pointing at the wrong row.
+    // A fresh result starts unsaved (nothing is stored until the user taps
+    // "Save Room Data"), so build the state directly: copyWith's ?? pattern
+    // couldn't reset designSaved.
     state = AppState(
       selectedRoomType: state.selectedRoomType,
       selectedStyle: state.selectedStyle,
@@ -295,31 +310,68 @@ class AppStateNotifier
       segmentedFurniture: response.furnitureSegments?.items ?? const [],
       uploadedImage: state.uploadedImage,
       selectedAiModel: state.selectedAiModel,
-      isSavingDesign: state.isSavingDesign,
+      isSavingDesign: false,
       designSaved: false,
-      currentDesignId: response.designId,
     );
   }
 
-  /// Flips the current design's `is_saved` flag to true — that's what the
-  /// history screen reads. The row itself was already created by the
-  /// backend when the design was generated; this is a lightweight update,
-  /// not a re-upload.
-  Future<void> saveGeneratedDesignToSupabase() async {
-    final designId = state.currentDesignId;
-    if (state.isSavingDesign || state.designSaved || designId == null) {
-      return;
+  /// Saves the current room -- the generated image and the photo it came
+  /// from -- to the user's saved rooms. Throws [SaveLimitReachedException] when
+  /// they already have the maximum, [NotSignedInException] when there is no
+  /// user to save under, and a [StateError] if there is nothing to save yet.
+  Future<SaveRoomResult> saveCurrentRoom() async {
+    final repository = _repositoryFactory?.call();
+    final generated = decodeDataUrl(state.generatedRoomImage);
+    final source = state.uploadedImage;
+    final roomType = state.selectedRoomType;
+    final style = state.selectedStyle;
+    final color = state.selectedColorOption;
+
+    if (repository == null ||
+        generated == null ||
+        source == null ||
+        roomType == null ||
+        style == null ||
+        color == null) {
+      throw StateError('There is no generated room to save yet.');
+    }
+    if (state.isSavingDesign || state.designSaved) {
+      throw StateError('This room is already saved.');
     }
 
     state = state.copyWith(isSavingDesign: true);
 
     try {
-      await DesignSaveService().markDesignSaved(designId);
+      final saved = await repository.save(
+        DesignToSave(
+          generatedImage: generated,
+          sourceImage: await _readSource(source),
+          sourceExtension: _extensionOf(source.path),
+          roomType: roomType.id,
+          style: style.id,
+          color: color.id,
+        ),
+      );
+      final count = (await repository.list()).length;
+
       state = state.copyWith(isSavingDesign: false, designSaved: true);
+      return SaveRoomResult(
+        design: saved,
+        savedCount: count,
+        limit: repository.maxSavedDesigns,
+      );
     } catch (_) {
       state = state.copyWith(isSavingDesign: false);
       rethrow;
     }
+  }
+
+  static String _extensionOf(String path) {
+    final dot = path.lastIndexOf('.');
+    final extension = dot < 0 ? '' : path.substring(dot + 1).toLowerCase();
+    return const {'jpg', 'jpeg', 'png', 'webp', 'heic'}.contains(extension)
+        ? extension
+        : 'jpg';
   }
 
   void setFakeResults() {
@@ -355,5 +407,7 @@ class AppStateNotifier
 }
 
 final appStateProvider = StateNotifierProvider<AppStateNotifier, AppState>((ref) {
-  return AppStateNotifier();
+  return AppStateNotifier(
+    repositoryFactory: () => ref.read(designRepositoryProvider),
+  );
 });
