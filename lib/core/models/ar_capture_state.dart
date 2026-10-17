@@ -26,6 +26,19 @@ class ARCaptureState {
 
   final String capturedAt;
 
+  /// Base64 greyscale PNG depth map (closer = brighter), only present on
+  /// LiDAR devices when this photo was captured within a room-scan session.
+  /// Combined with [depthMinMeters]/[depthMaxMeters], decodes back to real
+  /// depth per pixel — needed to unproject furniture in the generated image
+  /// back into 3-D for size estimation. Null on Android or non-LiDAR iOS.
+  final String? depthMapPng;
+
+  /// Real-world depth (metres) represented by pixel value 255 in [depthMapPng].
+  final double? depthMinMeters;
+
+  /// Real-world depth (metres) represented by pixel value 0 in [depthMapPng].
+  final double? depthMaxMeters;
+
   const ARCaptureState({
     required this.imagePath,
     required this.extrinsics,
@@ -34,7 +47,16 @@ class ARCaptureState {
     required this.imageHeight,
     required this.platform,
     required this.capturedAt,
+    this.depthMapPng,
+    this.depthMinMeters,
+    this.depthMaxMeters,
   });
+
+  /// True when this capture has everything needed for furniture-size
+  /// unprojection (i.e. it was taken in a LiDAR scan session, not a plain
+  /// gallery pick or standalone AR photo).
+  bool get hasDepth =>
+      depthMapPng != null && depthMinMeters != null && depthMaxMeters != null;
 
   // ── Convenience accessors ──────────────────────────────────────────────
 
@@ -61,6 +83,9 @@ class ARCaptureState {
         'imageHeight': imageHeight,
         'platform': platform,
         'capturedAt': capturedAt,
+        if (depthMapPng != null) 'depthMapPng': depthMapPng,
+        if (depthMinMeters != null) 'depthMinMeters': depthMinMeters,
+        if (depthMaxMeters != null) 'depthMaxMeters': depthMaxMeters,
       };
 
   String toJsonString() => const JsonEncoder.withIndent('  ').convert(toJson());
@@ -73,5 +98,8 @@ class ARCaptureState {
         imageHeight: (map['imageHeight'] as num).toInt(),
         platform: map['platform'] as String? ?? 'unknown',
         capturedAt: map['capturedAt'] as String? ?? DateTime.now().toIso8601String(),
+        depthMapPng: map['depthMapPng'] as String?,
+        depthMinMeters: (map['depthMinMeters'] as num?)?.toDouble(),
+        depthMaxMeters: (map['depthMaxMeters'] as num?)?.toDouble(),
       );
 }

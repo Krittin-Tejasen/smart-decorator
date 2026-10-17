@@ -282,12 +282,29 @@ class AppStateNotifier
       return;
     }
 
+    // Spatial data for furniture-size estimation — only present when the
+    // uploaded photo came from a LiDAR scan session (see lidar_view.dart's
+    // photo step). Both arCaptureState.hasDepth and scanSpatialData must be
+    // present and from that same session; either missing just means no
+    // sizing data goes to the backend, same as today.
+    final ar = state.arCaptureState;
+    final floorPlanPoints = state.scanSpatialData?['floorPlanPoints'] as List?;
+    final hasSpatial = ar != null && ar.hasDepth && floorPlanPoints != null;
+
     final request = GenerateRoomRequest(
       roomType: state.selectedRoomType!.id,
       style: state.selectedStyle!.id,
       color: state.selectedColorOption!.id,
       imagePath: state.uploadedImage!.path,
       provider: state.selectedAiModel.providerValue,
+      extrinsics: hasSpatial ? ar.extrinsics : null,
+      intrinsics: hasSpatial ? ar.intrinsics : null,
+      depthMapPng: hasSpatial ? ar.depthMapPng : null,
+      depthMinMeters: hasSpatial ? ar.depthMinMeters : null,
+      depthMaxMeters: hasSpatial ? ar.depthMaxMeters : null,
+      floorPlanPoints: hasSpatial
+          ? floorPlanPoints.map((p) => Map<String, dynamic>.from(p as Map)).toList()
+          : null,
     );
 
     final aiService = AIGenerationService();

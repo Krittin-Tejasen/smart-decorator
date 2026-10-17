@@ -21,6 +21,30 @@ class BoundingBox {
   }
 }
 
+/// Real-world size estimate for a furniture item, computed from LiDAR depth
+/// + camera pose when the scan provided them. Mirrors backend/segmentation.py's
+/// `FurnitureDimensions`. Null on the item when the backend couldn't compute
+/// it (no spatial data sent, or not enough valid depth under the item).
+class FurnitureDimensions {
+  final double widthM;
+  final double depthM;
+  final double heightM;
+
+  FurnitureDimensions({
+    required this.widthM,
+    required this.depthM,
+    required this.heightM,
+  });
+
+  factory FurnitureDimensions.fromJson(Map<String, dynamic> json) {
+    return FurnitureDimensions(
+      widthM: (json['width_m'] as num?)?.toDouble() ?? 0,
+      depthM: (json['depth_m'] as num?)?.toDouble() ?? 0,
+      heightM: (json['height_m'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
 class FurnitureFeatures {
   final List<String> dominantColors;
   final double areaPct;
@@ -68,6 +92,10 @@ class FurnitureItem {
   final bool maskPrecise;
   final FurnitureFeatures features;
 
+  /// Real-world width/depth/height, when the request included spatial data
+  /// and the backend could compute it. Null otherwise.
+  final FurnitureDimensions? dimensionsM;
+
   FurnitureItem({
     required this.id,
     required this.label,
@@ -78,11 +106,13 @@ class FurnitureItem {
     required this.maskImage,
     required this.maskPrecise,
     required this.features,
+    this.dimensionsM,
   });
 
   bool get hasCutout => cutoutImage != null && cutoutImage!.isNotEmpty;
 
   factory FurnitureItem.fromJson(Map<String, dynamic> json) {
+    final dims = json['dimensions_m'];
     return FurnitureItem(
       id: json['id'] as String? ?? '',
       label: json['label'] as String? ?? 'Item',
@@ -97,6 +127,9 @@ class FurnitureItem {
       features: FurnitureFeatures.fromJson(
         json['features'] as Map<String, dynamic>? ?? const {},
       ),
+      dimensionsM: dims is Map<String, dynamic>
+          ? FurnitureDimensions.fromJson(dims)
+          : null,
     );
   }
 }

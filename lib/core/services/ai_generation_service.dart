@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
@@ -75,6 +76,20 @@ class AIGenerationService {
         request.imagePath,
         filename: request.imagePath.split(RegExp(r'[\\/]')).last,
       ),
+      // Spatial data for furniture-size estimation — only sent when the
+      // photo came from a LiDAR scan session (see GenerateRoomRequest).
+      // Arrays/points are JSON-encoded strings; the backend decodes them.
+      if (request.extrinsics != null)
+        'camera_extrinsics': jsonEncode(request.extrinsics),
+      if (request.intrinsics != null)
+        'camera_intrinsics': jsonEncode(request.intrinsics),
+      if (request.depthMapPng != null) 'depth_map_png': request.depthMapPng,
+      if (request.depthMinMeters != null)
+        'depth_min_m': request.depthMinMeters.toString(),
+      if (request.depthMaxMeters != null)
+        'depth_max_m': request.depthMaxMeters.toString(),
+      if (request.floorPlanPoints != null)
+        'floor_plan_points': jsonEncode(request.floorPlanPoints),
     });
   }
 

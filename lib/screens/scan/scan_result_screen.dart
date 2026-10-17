@@ -1,8 +1,10 @@
 import 'dart:typed_data';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/models/ar_capture_state.dart';
 import '../../shared/providers/app_state_provider.dart';
 
 class ScanResultScreen extends ConsumerStatefulWidget {
@@ -78,9 +80,20 @@ class _ScanResultScreenState extends ConsumerState<ScanResultScreen> {
       'meshAnchors':     snapshot?['meshAnchors'],
     };
 
-    ref.read(appStateProvider.notifier)
+    final notifier = ref.read(appStateProvider.notifier)
       ..setScanSpatialData(spatialData)
       ..setScanCompleted();
+
+    // If a photo was captured in this same AR session (not skipped), buffer
+    // it too so it becomes the upload photo for generation — same session as
+    // the floor/ceiling taps means its extrinsics line up with the floor
+    // plan, which furniture-size estimation later depends on.
+    final capturedPhoto = widget.data['capturedPhoto'] as ARCaptureState?;
+    if (capturedPhoto != null) {
+      notifier
+        ..setUploadedImage(File(capturedPhoto.imagePath))
+        ..setARCaptureState(capturedPhoto);
+    }
 
     context.go('/home');
   }

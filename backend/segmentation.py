@@ -186,6 +186,14 @@ class FurnitureFeatures(BaseModel):
     aspect_ratio: float         # bbox width / height
 
 
+class FurnitureDimensions(BaseModel):
+    """Real-world size estimate — see spatial_measurement.py. Only computed
+    when the request included camera/depth/floor-plan data (a LiDAR scan)."""
+    width_m: float
+    depth_m: float
+    height_m: float
+
+
 class FurnitureItem(BaseModel):
     id: str
     label: str
@@ -199,6 +207,9 @@ class FurnitureItem(BaseModel):
     mask_image: str             # data:image/png;base64,… (full-size binary mask, L mode)
     mask_precise: bool          # True = real SAM 2 mask, False = bbox rectangle approximation
     features: FurnitureFeatures
+    # None unless the request carried spatial data AND enough real depth
+    # survived under this item's footprint (see spatial_measurement.py).
+    dimensions_m: FurnitureDimensions | None = None
 
 
 class SegmentationResult(BaseModel):

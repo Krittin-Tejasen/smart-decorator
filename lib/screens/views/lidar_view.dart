@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/models/ar_capture_state.dart';
 import '../widgets/scan_widgets.dart';
 
-enum _ScanStep { floor, height, done }
+// "photo" replaces the old standalone "done" step: capturing (or skipping)
+// the upload photo here — in the SAME AR session as the floor/ceiling taps —
+// is what finishes the scan. A separately-captured photo would have
+// unrelated extrinsics (ARKit resets world tracking per session), which
+// would silently break furniture-size unprojection later.
+enum _ScanStep { floor, height, photo }
 
 class LidarView extends StatefulWidget {
   const LidarView({super.key});
@@ -75,7 +81,7 @@ class _LidarViewState extends State<LidarView> {
       if (result != null) {
         setState(() {
           _ceilingY = (result['y'] as num).toDouble();
-          _step = _ScanStep.done;
+          _step = _ScanStep.photo;
         });
       }
     } on PlatformException catch (e) {
@@ -85,11 +91,35 @@ class _LidarViewState extends State<LidarView> {
     }
   }
 
-  // ── Step 3: Done — capture snapshot and navigate ─────────────────────────
+  // ── Step 3: Photo — capture the upload photo in this same AR session,
+  // then the room snapshot, then navigate. ────────────────────────────────
 
-  Future<void> _onDone() async {
-    if (_channel == null) return;
+  /// Shutter button: capture a photo (with depth, in this session) then finish.
+  Future<void> _capturePhotoAndFinish() async {
+    if (_channel == null || _isBusy) return;
     setState(() => _isBusy = true);
+
+    ARCaptureState? captured;
+    try {
+      final raw = await _channel!.invokeMethod<Map>('capturePhoto');
+      if (raw != null) captured = ARCaptureState.fromMap(raw);
+    } on PlatformException catch (e) {
+      debugPrint('capturePhoto error: ${e.message}');
+    }
+
+    await _finish(captured: captured);
+  }
+
+  /// "Skip" button: finish without a fresh photo (e.g. will pick from
+  /// gallery later) — size estimation just won't be available for this scan.
+  Future<void> _skipPhotoAndFinish() async {
+    if (_isBusy) return;
+    setState(() => _isBusy = true);
+    await _finish(captured: null);
+  }
+
+  Future<void> _finish({required ARCaptureState? captured}) async {
+    if (_channel == null) return;
 
     Map<String, dynamic>? snapshot;
     try {
@@ -118,6 +148,7 @@ class _LidarViewState extends State<LidarView> {
       'cornerCount': _cornerCount,
       'ceilingY': _ceilingY,
       'floorY': floorY,
+      'capturedPhoto': captured,
     });
   }
 
@@ -137,7 +168,7 @@ class _LidarViewState extends State<LidarView> {
             : '$_cornerCount corner${_cornerCount > 1 ? 's' : ''} marked · point at next corner';
       case _ScanStep.height:
         return 'Now point at the ceiling or top of a wall, then tap Mark Height';
-      case _ScanStep.done:
+      case _ScanStep.photo:
         final h = _ceilingY != null && _allPoints3D.isNotEmpty
             ? (_ceilingY! -
                     _allPoints3D.fold<double>(
@@ -145,14 +176,14 @@ class _LidarViewState extends State<LidarView> {
                         _allPoints3D.length)
                 .abs()
             : 0.0;
-        return 'Height marked: ${_fmtDistance(h)} · Tap Done to save';
+        return 'Height marked: ${_fmtDistance(h)} · Frame the room and tap the '
+            'shutter, or skip';
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final canMarkHeight = _cornerCount >= 3 && _step == _ScanStep.floor;
-    final canDone = _step == _ScanStep.done;
 
     return Stack(
       children: [
@@ -188,14 +219,14 @@ class _LidarViewState extends State<LidarView> {
                               ? Colors.cyanAccent : Colors.white24),
                       const SizedBox(width: 4),
                       _StepDot(active: _step == _ScanStep.height,
-                          done: _step == _ScanStep.done, label: '2 Height'),
+                          done: _step == _ScanStep.photo, label: '2 Height'),
                       const SizedBox(width: 4),
                       Container(width: 20, height: 2,
-                          color: _step == _ScanStep.done
+                          color: _step == _ScanStep.photo
                               ? Colors.cyanAccent : Colors.white24),
                       const SizedBox(width: 4),
-                      _StepDot(active: _step == _ScanStep.done,
-                          done: false, label: '3 Done'),
+                      _StepDot(active: _step == _ScanStep.photo,
+                          done: false, label: '3 Photo'),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -256,7 +287,7 @@ class _LidarViewState extends State<LidarView> {
                 ? _floorBar(canMarkHeight)
                 : _step == _ScanStep.height
                     ? _heightBar()
-                    : _doneBar(canDone),
+                    : _photoBar(),
           ),
         ),
       ],
@@ -340,19 +371,22 @@ class _LidarViewState extends State<LidarView> {
         ],
       );
 
-  // ── Bottom bar: step 3 (done) ────────────────────────────────────────────
-  Widget _doneBar(bool canDone) => Row(
+  // ── Bottom bar: step 3 (photo) ───────────────────────────────────────────
+  Widget _photoBar() => Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           TextButton.icon(
-            onPressed: () => setState(() => _step = _ScanStep.height),
+            onPressed: _isBusy
+                ? null
+                : () => setState(() => _step = _ScanStep.height),
             icon: const Icon(Icons.arrow_back_rounded, color: Colors.white60, size: 20),
             label: const Text('Redo Height',
                 style: TextStyle(color: Colors.white60, fontSize: 12)),
           ),
 
+          // Shutter: capture photo (with depth, same session) and finish
           GestureDetector(
-            onTap: (_isBusy || !canDone) ? null : _onDone,
+            onTap: _isBusy ? null : _capturePhotoAndFinish,
             child: Container(
               width: 64, height: 64,
               decoration: BoxDecoration(
@@ -367,11 +401,15 @@ class _LidarViewState extends State<LidarView> {
                       padding: EdgeInsets.all(18),
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.black))
-                  : const Icon(Icons.check_rounded, color: Colors.black, size: 36),
+                  : const Icon(Icons.camera_alt_rounded, color: Colors.black, size: 32),
             ),
           ),
 
-          const SizedBox(width: 72),
+          TextButton(
+            onPressed: _isBusy ? null : _skipPhotoAndFinish,
+            child: const Text('Skip',
+                style: TextStyle(color: Colors.white60, fontSize: 12)),
+          ),
         ],
       );
 }

@@ -17,6 +17,7 @@ Image providers (chosen via AI_IMAGE_PROVIDER env var):
 
 import asyncio
 import base64
+import json
 import os
 import time
 import traceback
@@ -29,7 +30,8 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 
-from segmentation import run_segmentation
+from segmentation import FurnitureDimensions, run_segmentation
+from spatial_measurement import measure_furniture
 
 router = APIRouter(tags=["generation"])
 
@@ -647,12 +649,34 @@ async def generate_room(
     image: UploadFile = File(...),
     segment: bool = Form(False),
     provider: str | None = Form(None),
+    # Spatial data for furniture-size estimation — all optional. Only present
+    # when the app's uploaded photo came from a LiDAR scan session. See
+    # spatial_measurement.py. camera_intrinsics/camera_extrinsics/
+    # floor_plan_points are JSON-encoded arrays/objects as strings.
+    camera_intrinsics: str | None = Form(None),
+    camera_extrinsics: str | None = Form(None),
+    depth_map_png: str | None = Form(None),
+    depth_min_m: float | None = Form(None),
+    depth_max_m: float | None = Form(None),
+    floor_plan_points: str | None = Form(None),
 ):
     image_bytes = await image.read()
     mime_type = image.content_type or "image/png"
 
     return await run_generate_room(
-        room_type, style, color, image_bytes, mime_type, segment=segment, provider=provider
+        room_type,
+        style,
+        color,
+        image_bytes,
+        mime_type,
+        segment=segment,
+        provider=provider,
+        camera_intrinsics=camera_intrinsics,
+        camera_extrinsics=camera_extrinsics,
+        depth_map_png=depth_map_png,
+        depth_min_m=depth_min_m,
+        depth_max_m=depth_max_m,
+        floor_plan_points=floor_plan_points,
     )
 
 
@@ -669,6 +693,12 @@ async def run_generate_room(
     mime_type: str,
     segment: bool = False,
     provider: str | None = None,
+    camera_intrinsics: str | None = None,
+    camera_extrinsics: str | None = None,
+    depth_map_png: str | None = None,
+    depth_min_m: float | None = None,
+    depth_max_m: float | None = None,
+    floor_plan_points: str | None = None,
     report: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """The whole generation pipeline: compose prompt -> generate -> critic
@@ -759,6 +789,42 @@ async def run_generate_room(
         _, encoded = generated_image.split(",", 1)
         gen_bytes = base64.b64decode(encoded)
         seg_result = await run_segmentation(gen_bytes, "image/png")
+
+        # Furniture-size estimation — only when the client sent full spatial
+        # data (a LiDAR scan session). Reuses the original scan's floor depth,
+        # valid only because the prompt above forces the camera framing to
+        # stay unchanged. See spatial_measurement.py for the full approach
+        # and its known limitations.
+        has_spatial_data = (
+            camera_intrinsics is not None
+            and camera_extrinsics is not None
+            and depth_map_png is not None
+            and depth_min_m is not None
+            and depth_max_m is not None
+            and floor_plan_points is not None
+        )
+        if has_spatial_data:
+            try:
+                intrinsics = json.loads(camera_intrinsics)
+                extrinsics = json.loads(camera_extrinsics)
+                plan_points = json.loads(floor_plan_points)
+                for item in seg_result.items:
+                    dims = measure_furniture(
+                        mask_png_b64=item.mask_image.split(",", 1)[-1],
+                        depth_map_png_b64=depth_map_png,
+                        depth_min_m=depth_min_m,
+                        depth_max_m=depth_max_m,
+                        intrinsics=intrinsics,
+                        extrinsics=extrinsics,
+                        floor_plan_points=plan_points,
+                    )
+                    if dims is not None:
+                        item.dimensions_m = FurnitureDimensions(**dims)
+            except Exception as exc:
+                # Never let a sizing bug break the generation response —
+                # items just keep dimensions_m=None, same as today.
+                print(f"Furniture size estimation failed: {exc}")
+
         response["furniture_segments"] = seg_result.model_dump()
 
     # Nothing is stored here. A generation only becomes a saved room when the
@@ -849,6 +915,12 @@ async def start_generate_room_job(
     image: UploadFile = File(...),
     segment: bool = Form(False),
     provider: str | None = Form(None),
+    camera_intrinsics: str | None = Form(None),
+    camera_extrinsics: str | None = Form(None),
+    depth_map_png: str | None = Form(None),
+    depth_min_m: float | None = Form(None),
+    depth_max_m: float | None = Form(None),
+    floor_plan_points: str | None = Form(None),
 ):
     image_bytes = await image.read()
     mime_type = image.content_type or "image/png"
@@ -870,6 +942,12 @@ async def start_generate_room_job(
             mime_type=mime_type,
             segment=segment,
             provider=provider,
+            camera_intrinsics=camera_intrinsics,
+            camera_extrinsics=camera_extrinsics,
+            depth_map_png=depth_map_png,
+            depth_min_m=depth_min_m,
+            depth_max_m=depth_max_m,
+            floor_plan_points=floor_plan_points,
         )
     )
     _jobs[job.id] = job

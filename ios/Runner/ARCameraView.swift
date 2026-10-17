@@ -207,6 +207,11 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
+        // Reuse RoomCaptureState's depth extraction so the photo and depth map
+        // come from this exact ARFrame — needed for furniture-size unprojection
+        // to be geometrically valid. nil on non-LiDAR devices.
+        let roomState = RoomCaptureState(frame: frame)
+
         result([
             "imagePath":  fileURL.path,
             "extrinsics": ext,
@@ -215,6 +220,9 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
             "imageHeight": imgH,
             "platform":   "ios",
             "capturedAt": iso.string(from: Date()),
+            "depthMapPng":    roomState.depthMapPng as Any,
+            "depthMinMeters": roomState.depthMinMeters as Any,
+            "depthMaxMeters": roomState.depthMaxMeters as Any,
         ] as [String: Any])
     }
 
