@@ -951,23 +951,31 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
 
     mask_only = [d for d in detections if is_mask_only_label(d["label"])]
     furniture = dedupe_detections([d for d in detections if not is_mask_only_label(d["label"])])
-    return drop_parts_of_hosts(furniture), mask_only
+    return merge_parts_into_hosts(furniture), mask_only
 
 
 # A piece whose box sits this far inside a bed's or sofa's box, and whose mask
 # lies this far inside that bed's or sofa's own SAM 2 mask, is part of it.
 _PART_BOX_CONTAINMENT = 0.85
 _PART_MASK_CONTAINMENT = 0.7
+# Can't stand inside a bed's or sofa's box as a piece of its own: inside that
+# box, a "mirror" or "painting" is the headboard (art above the bed hangs
+# above the box).
+_ALWAYS_PART_LABELS = frozenset({"headboard", "mirror", "artwork", "painting"})
 
 
-def drop_parts_of_hosts(dets: list[dict]) -> list[dict]:
-    """Drop detections that are really part of a bed or sofa.
+def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
+    """Fold detections that are really part of a bed or sofa into it.
 
     DINO reads a bed's base as a "bench" or its headboard as a "mirror"; as
     the smaller box, that piece would then take those pixels away from the
-    bed. When SAM 2 itself painted it as part of the bed, it is the bed. A real
-    bench at the foot of the bed reaches outside the bed's box and isn't in
-    its mask. Needs masks; box-only detections (Gemini) are left as they are.
+    bed. It is part of the bed when its box sits inside the bed's box and
+    either SAM 2 already painted it as the bed or it's a kind of thing that
+    can't stand there on its own (_ALWAYS_PART_LABELS). Its mask joins the
+    bed's, so the bed card shows its headboard; anything in front of it with a
+    box of its own (a lamp on the nightstand) is cut back out in _settle_masks.
+    A real bench at the foot of the bed reaches outside the bed's box and
+    stays. Needs masks; box-only detections (Gemini) are left as they are.
     """
     import numpy as np
 
@@ -980,7 +988,7 @@ def drop_parts_of_hosts(dets: list[dict]) -> list[dict]:
     host_masks = {id(h): as_bool(h["mask"]) for h in hosts}
     kept = []
     for det in dets:
-        part = False
+        host_of = None
         mask = as_bool(det.get("mask"))
         if det not in hosts and mask is not None and mask.any():
             for host in hosts:
@@ -989,11 +997,16 @@ def drop_parts_of_hosts(dets: list[dict]) -> list[dict]:
                 det_area = (det["box"][2] - det["box"][0]) * (det["box"][3] - det["box"][1])
                 if det_area >= host_area or box_in < _PART_BOX_CONTAINMENT:
                     continue
-                if (mask & host_masks[id(host)]).sum() / mask.sum() >= _PART_MASK_CONTAINMENT:
-                    part = True
+                in_host_mask = (mask & host_masks[id(host)]).sum() / mask.sum()
+                if det["label"] in _ALWAYS_PART_LABELS or in_host_mask >= _PART_MASK_CONTAINMENT:
+                    host_of = host
                     break
-        if not part:
+        if host_of is None:
             kept.append(det)
+        else:
+            host_masks[id(host_of)] = host_masks[id(host_of)] | mask
+    for host in hosts:
+        host["mask"] = Image.fromarray(host_masks[id(host)].astype("uint8") * 255, mode="L")
     return kept
 
 

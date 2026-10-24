@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 import segmentation as seg
@@ -160,7 +161,7 @@ class DedupeTests(unittest.TestCase):
         base = self.det("bench", 0.31, (0.3, 0.8, 0.75, 0.9))
         bed["mask"] = img(_rect_mask(100, 100, 10, 30, 80, 90))
         base["mask"] = img(_rect_mask(100, 100, 30, 80, 75, 90))
-        self.assertEqual(seg.drop_parts_of_hosts([bed, base]), [bed])
+        self.assertEqual(seg.merge_parts_into_hosts([bed, base]), [bed])
 
     def test_a_real_bench_at_the_foot_of_the_bed_stays(self):
         img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
@@ -168,7 +169,24 @@ class DedupeTests(unittest.TestCase):
         bench = self.det("bench", 0.5, (0.3, 0.75, 0.7, 0.95))
         bed["mask"] = img(_rect_mask(100, 100, 10, 30, 80, 80))
         bench["mask"] = img(_rect_mask(100, 100, 30, 80, 70, 95))
-        self.assertEqual(len(seg.drop_parts_of_hosts([bed, bench])), 2)
+        self.assertEqual(len(seg.merge_parts_into_hosts([bed, bench])), 2)
+
+    def test_a_mirror_inside_the_bed_box_is_its_headboard(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.1, 0.3, 0.8, 0.9))
+        headboard = self.det("mirror", 0.34, (0.08, 0.3, 0.3, 0.55))
+        bed["mask"] = img(_rect_mask(100, 100, 25, 45, 80, 90))
+        headboard["mask"] = img(_rect_mask(100, 100, 10, 30, 30, 55))
+        self.assertEqual(seg.merge_parts_into_hosts([bed, headboard]), [bed])
+        self.assertTrue((np.asarray(bed["mask"]) > 127)[35, 15])
+
+    def test_a_mirror_above_the_bed_stays(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.1, 0.5, 0.8, 0.9))
+        mirror = self.det("mirror", 0.6, (0.3, 0.1, 0.6, 0.45))
+        bed["mask"] = img(_rect_mask(100, 100, 10, 50, 80, 90))
+        mirror["mask"] = img(_rect_mask(100, 100, 30, 10, 60, 45))
+        self.assertEqual(len(seg.merge_parts_into_hosts([bed, mirror])), 2)
 
     def test_near_identical_boxes_merge_even_across_families(self):
         kept = seg.dedupe_detections(
