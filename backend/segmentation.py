@@ -119,6 +119,8 @@ _FURNITURE_PROMPT = (
     # Mask-only: found so their pixels can be cut out of the sofa or bed they
     # sit on, then dropped. A product match should see the sofa, not its pillows.
     "pillow . cushion . throw pillow . "
+    # Part of the bed, but named so DINO doesn't call the duvet a "cushion".
+    "blanket . "
     # Decoys, not furniture: without them Grounding DINO forces a door onto the
     # nearest furniture word ("mirror") and a window onto "curtain". Giving it
     # the truthful label lets us drop those detections below. They're what the
@@ -132,12 +134,15 @@ _MAX_PHRASE_WORDS = max(len(p.split()) for p in _VOCAB)
 
 # Architecture / fixtures that must never show up as a shoppable card — whether
 # they came from the DINO decoys above or from Gemini's "every item" answer.
-_NON_FURNITURE_LABELS = frozenset({"door", "window", "ceiling light", "air vent", "vent"})
+_NON_FURNITURE_LABELS = frozenset({"door", "window", "ceiling light", "air vent", "vent", "blanket"})
 
 # Segmented only to take their pixels away from what they sit on; never a card.
 _MASK_ONLY_LABELS = frozenset({"pillow", "cushion", "throw pillow"})
 # What pillows are cut out of. Not chairs: DINO calls a seat "cushion" too.
 _PILLOW_HOSTS = frozenset({"sofa", "couch", "bed"})
+# A "pillow" box bigger than this share of the bed or sofa box is something
+# else (a fold of the duvet); cutting it out would take part of the piece.
+_MAX_PILLOW_HOST_SHARE = 0.15
 
 # Labels of the same "family" are treated as the same physical object when
 # their boxes overlap heavily (Grounding DINO often reports one chair twice as
@@ -424,25 +429,55 @@ def _box_iou_and_containment(a: tuple, b: tuple) -> tuple[float, float]:
     return (inter / union if union else 0.0), (inter / smaller if smaller else 0.0)
 
 
-def dedupe_detections(dets: list[dict]) -> list[dict]:
-    """Greedy NMS over detections shaped {"label", "confidence", "box": (x1,y1,x2,y2)}.
+def _mask_iou_and_containment(a, b) -> tuple[float, float]:
+    """IoU and intersection/smaller-area for two bool masks."""
+    inter = int((a & b).sum())
+    area_a, area_b = int(a.sum()), int(b.sum())
+    union = area_a + area_b - inter
+    smaller = min(area_a, area_b)
+    return (inter / union if union else 0.0), (inter / smaller if smaller else 0.0)
 
-    Highest confidence wins. Two boxes are the same object when they overlap
-    heavily AND look like the same kind of thing (same label family) — a pillow
-    sitting inside a sofa's box must survive, a chair reported twice must not.
+
+def dedupe_detections(dets: list[dict]) -> list[dict]:
+    """Greedy NMS over detections shaped {"label", "confidence", "box": (x1,y1,x2,y2)},
+    optionally with a SAM 2 "mask".
+
+    Two detections are the same object when they overlap heavily AND look like
+    the same kind of thing (same label family) — a pillow sitting inside a
+    sofa's box must survive, a chair reported twice must not. With masks on
+    both, the overlap is measured on the masks: dining chairs set one behind
+    another have overlapping boxes but separate masks. Without masks (Gemini
+    fallback), on the boxes.
+
+    Highest confidence goes first; when a duplicate has the larger mask it
+    replaces the one kept, so the card shows the most complete view.
     """
+    import numpy as np
+
+    def as_bool(mask):
+        return None if mask is None else np.asarray(mask.convert("L")) > 127
+
+    masks = {id(d): as_bool(d.get("mask")) for d in dets}
     kept: list[dict] = []
     for det in sorted(dets, key=lambda d: d["confidence"], reverse=True):
         family = _LABEL_FAMILY.get(det["label"], det["label"])
-        duplicate = False
-        for other in kept:
-            iou, containment = _box_iou_and_containment(det["box"], other["box"])
+        duplicate = None
+        for i, other in enumerate(kept):
+            m_det, m_other = masks[id(det)], masks[id(other)]
+            if m_det is not None and m_other is not None:
+                iou, containment = _mask_iou_and_containment(m_det, m_other)
+            else:
+                iou, containment = _box_iou_and_containment(det["box"], other["box"])
             same_family = family == _LABEL_FAMILY.get(other["label"], other["label"])
             if (same_family and (iou > 0.4 or containment > 0.8)) or iou > 0.8:
-                duplicate = True
+                duplicate = i
                 break
-        if not duplicate:
+        if duplicate is None:
             kept.append(det)
+        else:
+            m_det, m_other = masks[id(det)], masks[id(kept[duplicate])]
+            if m_det is not None and m_other is not None and m_det.sum() > m_other.sum():
+                kept[duplicate] = det
     return kept
 
 
@@ -606,11 +641,14 @@ def resolve_overlaps(dets: list[dict]) -> None:
             b_floor = b.get("label") in _FLOOR_LABELS
             if b_floor:
                 continue  # a rug never takes pixels
-            if b.get("label") in _MASK_ONLY_LABELS and a.get("label") not in _PILLOW_HOSTS:
-                continue  # a chair's seat cushion is part of the chair
+            area_a = (a["box"][2] - a["box"][0]) * (a["box"][3] - a["box"][1])
+            area_b = (b["box"][2] - b["box"][0]) * (b["box"][3] - b["box"][1])
+            if b.get("label") in _MASK_ONLY_LABELS:
+                if a.get("label") not in _PILLOW_HOSTS:
+                    continue  # a chair's seat cushion is part of the chair
+                if area_b > area_a * _MAX_PILLOW_HOST_SHARE:
+                    continue  # too big to be a pillow on it
             if not a_floor:
-                area_a = (a["box"][2] - a["box"][0]) * (a["box"][3] - a["box"][1])
-                area_b = (b["box"][2] - b["box"][0]) * (b["box"][3] - b["box"][1])
                 if area_b >= area_a * _MAX_FRONT_AREA_RATIO:
                     continue  # not clearly in front
             a["mask"] = a["mask"] & ~b["mask"]
@@ -913,7 +951,50 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
 
     mask_only = [d for d in detections if is_mask_only_label(d["label"])]
     furniture = dedupe_detections([d for d in detections if not is_mask_only_label(d["label"])])
-    return furniture, mask_only
+    return drop_parts_of_hosts(furniture), mask_only
+
+
+# A piece whose box sits this far inside a bed's or sofa's box, and whose mask
+# lies this far inside that bed's or sofa's own SAM 2 mask, is part of it.
+_PART_BOX_CONTAINMENT = 0.85
+_PART_MASK_CONTAINMENT = 0.7
+
+
+def drop_parts_of_hosts(dets: list[dict]) -> list[dict]:
+    """Drop detections that are really part of a bed or sofa.
+
+    DINO reads a bed's base as a "bench" or its headboard as a "mirror"; as
+    the smaller box, that piece would then take those pixels away from the
+    bed. When SAM 2 itself painted it as part of the bed, it is the bed. A real
+    bench at the foot of the bed reaches outside the bed's box and isn't in
+    its mask. Needs masks; box-only detections (Gemini) are left as they are.
+    """
+    import numpy as np
+
+    def as_bool(mask):
+        return None if mask is None else np.asarray(mask.convert("L")) > 127
+
+    hosts = [d for d in dets if d["label"] in _PILLOW_HOSTS and d.get("mask") is not None]
+    if not hosts:
+        return dets
+    host_masks = {id(h): as_bool(h["mask"]) for h in hosts}
+    kept = []
+    for det in dets:
+        part = False
+        mask = as_bool(det.get("mask"))
+        if det not in hosts and mask is not None and mask.any():
+            for host in hosts:
+                _iou, box_in = _box_iou_and_containment(det["box"], host["box"])
+                host_area = (host["box"][2] - host["box"][0]) * (host["box"][3] - host["box"][1])
+                det_area = (det["box"][2] - det["box"][0]) * (det["box"][3] - det["box"][1])
+                if det_area >= host_area or box_in < _PART_BOX_CONTAINMENT:
+                    continue
+                if (mask & host_masks[id(host)]).sum() / mask.sum() >= _PART_MASK_CONTAINMENT:
+                    part = True
+                    break
+        if not part:
+            kept.append(det)
+    return kept
 
 
 # A piece left with less than this share of its own mask after the overlap

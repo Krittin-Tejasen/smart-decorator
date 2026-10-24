@@ -137,6 +137,39 @@ class DedupeTests(unittest.TestCase):
         )
         self.assertEqual([d["label"] for d in kept], ["console table"])
 
+    def test_chairs_one_behind_another_survive_when_their_masks_are_apart(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        front = self.det("armchair", 0.41, (0.20, 0.50, 0.45, 0.95))
+        back = self.det("armchair", 0.38, (0.25, 0.45, 0.47, 0.80))
+        front["mask"] = img(_rect_mask(100, 100, 20, 60, 45, 95))
+        back["mask"] = img(_rect_mask(100, 100, 30, 45, 47, 59))
+        self.assertEqual(len(seg.dedupe_detections([front, back])), 2)
+
+    def test_the_same_chair_twice_keeps_the_more_complete_mask(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        partial = self.det("armchair", 0.39, (0.30, 0.17, 0.38, 0.26))
+        whole = self.det("armchair", 0.32, (0.30, 0.17, 0.38, 0.27))
+        partial["mask"] = img(_rect_mask(100, 100, 30, 17, 38, 24))
+        whole["mask"] = img(_rect_mask(100, 100, 30, 17, 38, 27))
+        kept = seg.dedupe_detections([partial, whole])
+        self.assertEqual(kept, [whole])
+
+    def test_a_bench_that_sam_painted_as_the_bed_base_is_dropped(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.1, 0.3, 0.8, 0.9))
+        base = self.det("bench", 0.31, (0.3, 0.8, 0.75, 0.9))
+        bed["mask"] = img(_rect_mask(100, 100, 10, 30, 80, 90))
+        base["mask"] = img(_rect_mask(100, 100, 30, 80, 75, 90))
+        self.assertEqual(seg.drop_parts_of_hosts([bed, base]), [bed])
+
+    def test_a_real_bench_at_the_foot_of_the_bed_stays(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.1, 0.3, 0.8, 0.8))
+        bench = self.det("bench", 0.5, (0.3, 0.75, 0.7, 0.95))
+        bed["mask"] = img(_rect_mask(100, 100, 10, 30, 80, 80))
+        bench["mask"] = img(_rect_mask(100, 100, 30, 80, 70, 95))
+        self.assertEqual(len(seg.drop_parts_of_hosts([bed, bench])), 2)
+
     def test_near_identical_boxes_merge_even_across_families(self):
         kept = seg.dedupe_detections(
             [
@@ -316,6 +349,16 @@ class SamMaskTests(unittest.TestCase):
         vase = {"label": "vase", "box": (0.45, 0.2, 0.55, 0.45), "mask": img(_rect_mask(100, 100, 40, 12, 60, 50))}
         seg._settle_masks([lamp2, vase], 100, 100)
         self.assertTrue(lamp2["swallowed"])
+
+    def test_a_duvet_sized_pillow_box_is_not_cut_out_of_the_bed(self):
+        bed = {"label": "bed", "box": (0.0, 0.3, 0.6, 0.9), "mask": _rect_mask(100, 100, 0, 30, 60, 90)}
+        fold = {"label": "cushion", "box": (0.25, 0.4, 0.45, 0.8), "mask": _rect_mask(100, 100, 25, 40, 45, 80)}
+        seg.resolve_overlaps([bed, fold])
+        self.assertTrue(bed["mask"][60, 35])
+
+    def test_blanket_is_neither_a_card_nor_cut_out(self):
+        self.assertFalse(seg.is_furniture_label("blanket"))
+        self.assertFalse(seg.is_mask_only_label("blanket"))
 
     def test_pillows_are_mask_only(self):
         self.assertTrue(seg.is_mask_only_label("cushion"))

@@ -125,9 +125,16 @@ def _items_sheet(img: Image.Image, labels: list, columns: dict) -> Image.Image:
 def compare(path: Path) -> None:
     img = Image.open(path).convert("RGB")
     W, H = img.size
-    # The same detections the pipeline keeps: filtered, size-checked, deduped.
-    found = seg._detect_with_grounding_dino_local(img)
-    dets, mask_only = seg.select_detections(found, [None] * len(found), W, H)
+    # Same order as run_segmentation: SAM 2 on every candidate, then the
+    # pipeline's own filtering, size checks and (mask-based) dedupe.
+    found = [
+        d for d in seg._detect_with_grounding_dino_local(img)
+        if seg.is_furniture_label(d["label"]) or seg.is_mask_only_label(d["label"])
+    ]
+    after_raw = seg._segment_boxes_with_sam2_local(
+        img, [d["box"] for d in found], [d["label"] for d in found]
+    )
+    dets, mask_only = seg.select_detections(found, after_raw, W, H)
     to_px = lambda b: [b[0] * W, b[1] * H, b[2] * W, b[3] * H]
     boxes = [to_px(d["box"]) for d in dets]
     print(f"{path.name}: {len(dets)} items — {', '.join(d['label'] for d in dets)}")
@@ -136,11 +143,6 @@ def compare(path: Path) -> None:
 
     before = _before(img, boxes)
     all_dets = dets + mask_only
-    after_raw = seg._segment_boxes_with_sam2_local(
-        img, [to_px(d["box"]) for d in all_dets], [d["label"] for d in all_dets]
-    )
-    for d, m in zip(all_dets, after_raw):
-        d["mask"] = m
     seg._settle_masks(all_dets, W, H)
     after = [d["mask"] for d in dets]
     labels = [d["label"] + (" (dropped)" if d.get("swallowed") else "") for d in dets]
