@@ -288,6 +288,26 @@ class SamMaskTests(unittest.TestCase):
         self.assertTrue(bed["mask"][50, 30])
         self.assertTrue(pillow["mask"][50, 30])
 
+    def test_clean_mask_leaves_shelf_openings_open_without_hole_filling(self):
+        shelf = _rect_mask(100, 100, 20, 20, 80, 80)
+        shelf[25:35, 25:75] = False              # one opening between shelves
+        cleaned = seg.clean_mask(shelf, [10, 10, 90, 90], fill_holes=False)
+        self.assertFalse(cleaned[30, 50])
+
+    def test_the_bed_keeps_its_base_where_the_rug_runs_under_it(self):
+        bed = {"label": "bed", "box": (0.1, 0.3, 0.6, 0.8), "mask": _rect_mask(100, 100, 10, 30, 60, 80)}
+        rug = {"label": "rug", "box": (0.15, 0.7, 0.7, 0.95), "mask": _rect_mask(100, 100, 15, 70, 70, 95)}
+        seg.resolve_overlaps([bed, rug])
+        self.assertTrue(bed["mask"][75, 30])
+        self.assertFalse(rug["mask"][75, 30])
+
+    def test_similar_sized_boxes_keep_their_own_pixels(self):
+        table = {"label": "dining table", "box": (0.2, 0.4, 0.8, 0.8), "mask": _rect_mask(100, 100, 20, 40, 80, 80)}
+        sideboard = {"label": "bookshelf", "box": (0.3, 0.3, 0.8, 0.6), "mask": _rect_mask(100, 100, 30, 30, 80, 60)}
+        seg.resolve_overlaps([table, sideboard])
+        self.assertTrue(table["mask"][50, 50])
+        self.assertTrue(sideboard["mask"][50, 50])
+
     def test_settle_masks_grows_the_box_to_cover_the_mask(self):
         mask = Image.fromarray(_rect_mask(100, 100, 18, 20, 80, 95).astype("uint8") * 255, mode="L")
         dets = [{"box": (0.2, 0.2, 0.8, 0.9), "mask": mask}]

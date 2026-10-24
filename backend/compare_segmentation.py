@@ -23,6 +23,8 @@ OUT_DIR = Path("compare")
 COLOURS = [
     (230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200), (245, 130, 48),
     (145, 30, 180), (70, 240, 240), (240, 50, 230), (210, 245, 60), (0, 128, 128),
+    (170, 110, 40), (128, 0, 0), (170, 255, 195), (128, 128, 0), (0, 0, 128),
+    (255, 215, 180), (250, 190, 212), (220, 190, 255), (255, 250, 200), (128, 128, 128),
 ]
 
 
@@ -57,10 +59,11 @@ def compare(path: Path) -> None:
     print(f"{path.name}: {len(dets)} items — {', '.join(d['label'] for d in dets)}")
 
     before = _before(img, boxes)
-    after_raw = seg._segment_boxes_with_sam2_local(img, boxes)
+    labels = [d["label"] for d in dets]
+    after_raw = seg._segment_boxes_with_sam2_local(img, boxes, labels)
     settled = [
-        {"box": (b[0] / W, b[1] / H, b[2] / W, b[3] / H), "mask": m}
-        for b, m in zip(boxes, after_raw)
+        {"box": (b[0] / W, b[1] / H, b[2] / W, b[3] / H), "mask": m, "label": l}
+        for b, m, l in zip(boxes, after_raw, labels)
     ]
     seg._settle_masks(settled, W, H)
     after = [d["mask"] for d in settled]

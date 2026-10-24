@@ -481,11 +481,23 @@ def parse_gemini_items(items: list) -> list[dict]:
 # (a patch of wall, a shadow), not part of the piece.
 _MIN_COMPONENT_SHARE = 0.25
 # Enclosed holes smaller than this share of the mask are SAM 2 noise and get
-# filled; bigger ones (the gap in a chair back) are real and stay.
-_MAX_HOLE_SHARE = 0.02
+# filled; bigger ones (the gap in a chair back) are real and stay. At 2% every
+# opening of an open shelf counted as noise and the wall behind was filled in.
+_MAX_HOLE_SHARE = 0.005
 # A mask with more than this share of its pixels outside the padded box has
 # grabbed the wall or floor around the piece.
 _MAX_MASK_LEAK = 0.2
+# Flat on the floor: a rug blends into the floor around it, so padding its
+# (already large) box let the mask spill onto bare floor. Rugs are also always
+# behind whatever stands on them.
+_FLOOR_LABELS = {"rug", "carpet"}
+# See-through pieces: SAM 2's "whole" candidate and hole filling both paint
+# the wall between the shelves. The old single-mask call got these right.
+_OPEN_FRAME_LABELS = {"bookshelf", "bookcase", "shelf", "shelving unit", "floating shelf", "etagere"}
+# A box must be smaller than this share of another's area to count as sitting
+# in front of it (lamp on a nightstand). Two similar-sized boxes are left alone:
+# "smaller is in front" handed a dining table's pixels to the sideboard box.
+_MAX_FRONT_AREA_RATIO = 0.4
 
 
 def pad_box(box: list[float], W: int, H: int, pad: float) -> list[float]:
@@ -530,7 +542,7 @@ def select_best_mask(masks, scores, box: list[float], margin: float = 0.15) -> i
     )[0]
 
 
-def clean_mask(mask, box: list[float]):
+def clean_mask(mask, box: list[float], fill_holes: bool = True):
     """Clip to the (padded) box, drop stray blobs, fill pin-holes."""
     import cv2
     import numpy as np
@@ -545,6 +557,8 @@ def clean_mask(mask, box: list[float]):
     areas = stats[1:, cv2.CC_STAT_AREA]
     keep = [i + 1 for i, area in enumerate(areas) if area >= _MIN_COMPONENT_SHARE * areas.max()]
     cleaned = np.isin(labels, keep)
+    if not fill_holes:
+        return cleaned
 
     # Holes = background regions that don't touch the border of the box.
     region = ~cleaned[rows, cols]
@@ -562,23 +576,30 @@ def clean_mask(mask, box: list[float]):
 def resolve_overlaps(dets: list[dict]) -> None:
     """Give pixels claimed by two masks to the piece in front, in place.
 
-    `dets` are {"box": normalised xyxy, "mask": bool array or None}. When one
-    box sits inside the other (pillows on a bed, a vase on a shelf) both keep
-    the shared pixels: the bed card should show its pillows. Otherwise the
-    smaller box is taken to be in front (the lamp on the nightstand, the chair
-    against the table) and the larger one gives those pixels up.
+    `dets` are {"box": normalised xyxy, "mask": bool array or None, "label"
+    optional}. A rug is always behind: it gives shared pixels to anything and
+    takes none. Otherwise a box well under the other's size is in front (the
+    lamp on the nightstand) and the larger one gives those pixels up — unless
+    it sits inside the larger box (pillows on a bed, a vase on a shelf), where
+    both keep them: the bed card should show its pillows. Similar-sized boxes
+    keep their own masks.
     """
     for a in dets:
         for b in dets:
             if a is b or a["mask"] is None or b["mask"] is None:
                 continue
-            area_a = (a["box"][2] - a["box"][0]) * (a["box"][3] - a["box"][1])
-            area_b = (b["box"][2] - b["box"][0]) * (b["box"][3] - b["box"][1])
-            if area_b >= area_a:
-                continue  # only the larger piece gives pixels up
-            _iou, containment = _box_iou_and_containment(a["box"], b["box"])
-            if containment > 0.8:
-                continue  # b sits inside a's box — a keeps them
+            a_floor = a.get("label") in _FLOOR_LABELS
+            b_floor = b.get("label") in _FLOOR_LABELS
+            if b_floor:
+                continue  # a rug never takes pixels
+            if not a_floor:
+                area_a = (a["box"][2] - a["box"][0]) * (a["box"][3] - a["box"][1])
+                area_b = (b["box"][2] - b["box"][0]) * (b["box"][3] - b["box"][1])
+                if area_b >= area_a * _MAX_FRONT_AREA_RATIO:
+                    continue  # not clearly in front
+                _iou, containment = _box_iou_and_containment(a["box"], b["box"])
+                if containment > 0.8:
+                    continue  # b sits inside a's box — a keeps them
             a["mask"] = a["mask"] & ~b["mask"]
 
 
@@ -715,7 +736,7 @@ def _post_process_threshold_kwargs(processor: Any, box_threshold: float, text_th
 # ── Stage 2: SAM 2 (image + boxes → one mask per box), run locally ─────────
 
 def _segment_boxes_with_sam2_local(
-    img: Image.Image, boxes_px: list[list[float]]
+    img: Image.Image, boxes_px: list[list[float]], labels: list[str] | None = None
 ) -> list[Image.Image | None]:
     if not boxes_px:
         return []
@@ -739,9 +760,19 @@ def _segment_boxes_with_sam2_local(
     masks_out: list[Image.Image | None] = []
     with _inference_lock, torch.inference_mode(), autocast_ctx:
         predictor.set_image(image_np)
-        for box in boxes_px:
+        for box, label in zip(boxes_px, labels or [""] * len(boxes_px)):
             try:
-                padded = pad_box(box, W, H, box_pad)
+                if label in _OPEN_FRAME_LABELS:
+                    # The old call: raw box, SAM 2's single mask, no hole filling.
+                    masks, _scores, _logits = predictor.predict(
+                        box=np.array(box), multimask_output=False
+                    )
+                    keep = pad_box(box, W, H, box_pad)
+                    mask_arr = clean_mask(masks[0] > 0, keep, fill_holes=False).astype("uint8") * 255
+                    masks_out.append(Image.fromarray(mask_arr, mode="L"))
+                    continue
+                floor = label in _FLOOR_LABELS
+                padded = list(box) if floor else pad_box(box, W, H, box_pad)
                 masks, scores, _logits = predictor.predict(
                     box=np.array(padded), multimask_output=multimask
                 )
@@ -878,8 +909,10 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
     try:
         raw = await asyncio.to_thread(_detect_with_grounding_dino_local, img)
         boxes_px = [det["box"] for det in raw]
+        labels = [det["label"] for det in raw]
         mask_imgs = (
-            await asyncio.to_thread(_segment_boxes_with_sam2_local, img, boxes_px) if raw else []
+            await asyncio.to_thread(_segment_boxes_with_sam2_local, img, boxes_px, labels)
+            if raw else []
         )
     except Exception as exc:
         fallback_reason = f"{type(exc).__name__}: {exc}"
