@@ -374,9 +374,28 @@ class SamMaskTests(unittest.TestCase):
         seg.resolve_overlaps([bed, fold])
         self.assertTrue(bed["mask"][60, 35])
 
-    def test_blanket_is_neither_a_card_nor_cut_out(self):
+    def test_blanket_is_never_a_card(self):
         self.assertFalse(seg.is_furniture_label("blanket"))
-        self.assertFalse(seg.is_mask_only_label("blanket"))
+        self.assertTrue(seg.is_candidate_label("blanket"))
+        self.assertFalse(seg.is_candidate_label("door"))
+
+    def test_a_blanket_on_the_bed_joins_the_bed(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = {"label": "bed", "confidence": 0.8, "box": (0.1, 0.3, 0.9, 0.9), "mask": img(_rect_mask(100, 100, 10, 30, 60, 90))}
+        duvet = {"label": "blanket", "confidence": 0.37, "box": (0.4, 0.5, 0.88, 0.85), "mask": img(_rect_mask(100, 100, 40, 50, 88, 85))}
+        furniture, mask_only = seg.select_detections([bed, duvet], [bed["mask"], duvet["mask"]], 100, 100)
+        self.assertEqual([d["label"] for d in furniture], ["bed"])
+        self.assertEqual(mask_only, [])
+        self.assertTrue((np.asarray(furniture[0]["mask"]) > 127)[70, 80])
+
+    def test_a_blanket_on_the_sofa_is_cut_out(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        sofa = {"label": "sofa", "confidence": 0.7, "box": (0.1, 0.4, 0.9, 0.8), "mask": img(_rect_mask(100, 100, 10, 40, 90, 80))}
+        throw = {"label": "blanket", "confidence": 0.4, "box": (0.6, 0.45, 0.75, 0.7), "mask": img(_rect_mask(100, 100, 60, 45, 75, 70))}
+        furniture, mask_only = seg.select_detections([sofa, throw], [sofa["mask"], throw["mask"]], 100, 100)
+        self.assertEqual([d["label"] for d in furniture], ["sofa"])
+        seg._settle_masks(furniture + mask_only, 100, 100)
+        self.assertFalse((np.asarray(furniture[0]["mask"]) > 127)[55, 65])
 
     def test_pillows_are_mask_only(self):
         self.assertTrue(seg.is_mask_only_label("cushion"))

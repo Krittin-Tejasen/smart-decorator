@@ -119,7 +119,7 @@ _FURNITURE_PROMPT = (
     # Mask-only: found so their pixels can be cut out of the sofa or bed they
     # sit on, then dropped. A product match should see the sofa, not its pillows.
     "pillow . cushion . throw pillow . "
-    # Part of the bed, but named so DINO doesn't call the duvet a "cushion".
+    # Named so DINO doesn't call the duvet a "cushion"; folded into the bed.
     "blanket . "
     # Decoys, not furniture: without them Grounding DINO forces a door onto the
     # nearest furniture word ("mirror") and a window onto "curtain". Giving it
@@ -134,10 +134,13 @@ _MAX_PHRASE_WORDS = max(len(p.split()) for p in _VOCAB)
 
 # Architecture / fixtures that must never show up as a shoppable card — whether
 # they came from the DINO decoys above or from Gemini's "every item" answer.
-_NON_FURNITURE_LABELS = frozenset({"door", "window", "ceiling light", "air vent", "vent", "blanket"})
+_NON_FURNITURE_LABELS = frozenset({"door", "window", "ceiling light", "air vent", "vent"})
 
 # Segmented only to take their pixels away from what they sit on; never a card.
 _MASK_ONLY_LABELS = frozenset({"pillow", "cushion", "throw pillow"})
+# Never a card of its own: a blanket on a bed joins the bed's mask; one on a
+# sofa is cut out of it like a pillow.
+_PART_ONLY_LABELS = frozenset({"blanket"})
 # What pillows are cut out of. Not chairs: DINO calls a seat "cushion" too.
 _PILLOW_HOSTS = frozenset({"sofa", "couch", "bed"})
 # A "pillow" box bigger than this share of the bed or sofa box is something
@@ -410,11 +413,16 @@ def canonicalize_label(raw: str) -> str:
 
 
 def is_furniture_label(label: str) -> bool:
-    return label.strip().lower() not in _NON_FURNITURE_LABELS | _MASK_ONLY_LABELS
+    return label.strip().lower() not in _NON_FURNITURE_LABELS | _MASK_ONLY_LABELS | _PART_ONLY_LABELS
 
 
 def is_mask_only_label(label: str) -> bool:
     return label.strip().lower() in _MASK_ONLY_LABELS
+
+
+def is_candidate_label(label: str) -> bool:
+    """Worth a SAM 2 mask: furniture, or something cut out of / folded into it."""
+    return label.strip().lower() not in _NON_FURNITURE_LABELS
 
 
 def _box_iou_and_containment(a: tuple, b: tuple) -> tuple[float, float]:
@@ -643,7 +651,7 @@ def resolve_overlaps(dets: list[dict]) -> None:
                 continue  # a rug never takes pixels
             area_a = (a["box"][2] - a["box"][0]) * (a["box"][3] - a["box"][1])
             area_b = (b["box"][2] - b["box"][0]) * (b["box"][3] - b["box"][1])
-            if b.get("label") in _MASK_ONLY_LABELS:
+            if b.get("label") in _MASK_ONLY_LABELS | _PART_ONLY_LABELS:
                 if a.get("label") not in _PILLOW_HOSTS:
                     continue  # a chair's seat cushion is part of the chair
                 if area_b > area_a * _MAX_PILLOW_HOST_SHARE:
@@ -923,7 +931,7 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
     detections: list[dict] = []
     for det, mask_img in zip(raw, mask_imgs):
         box = det.get("box", [])
-        if len(box) != 4 or not (is_furniture_label(det["label"]) or is_mask_only_label(det["label"])):
+        if len(box) != 4 or not is_candidate_label(det["label"]):
             continue
 
         x1, y1, x2, y2 = (float(v) for v in box)
@@ -951,7 +959,10 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
 
     mask_only = [d for d in detections if is_mask_only_label(d["label"])]
     furniture = dedupe_detections([d for d in detections if not is_mask_only_label(d["label"])])
-    return merge_parts_into_hosts(furniture), mask_only
+    furniture = merge_parts_into_hosts(furniture)
+    # A blanket that didn't join a bed is cut out of whatever it lies on.
+    mask_only += [d for d in furniture if d["label"] in _PART_ONLY_LABELS]
+    return [d for d in furniture if d["label"] not in _PART_ONLY_LABELS], mask_only
 
 
 # A piece whose box sits this far inside a bed's or sofa's box, and whose mask
@@ -997,8 +1008,10 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
                 det_area = (det["box"][2] - det["box"][0]) * (det["box"][3] - det["box"][1])
                 if det_area >= host_area or box_in < _PART_BOX_CONTAINMENT:
                     continue
+                if det["label"] in _PART_ONLY_LABELS and host["label"] != "bed":
+                    continue  # a throw on a sofa is cut out, not folded in
                 in_host_mask = (mask & host_masks[id(host)]).sum() / mask.sum()
-                if det["label"] in _ALWAYS_PART_LABELS or in_host_mask >= _PART_MASK_CONTAINMENT:
+                if det["label"] in _ALWAYS_PART_LABELS | _PART_ONLY_LABELS or in_host_mask >= _PART_MASK_CONTAINMENT:
                     host_of = host
                     break
         if host_of is None:
