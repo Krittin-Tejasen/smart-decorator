@@ -88,6 +88,13 @@ class LabelTests(unittest.TestCase):
         self.assertIn("window", seg._VOCAB_SET)
         self.assertTrue(seg._FURNITURE_PROMPT.rstrip().endswith("."))
 
+    def test_every_phrase_is_separated(self):
+        # A missing " . " once glued "cabinet" onto "floor lamp", so DINO was
+        # never asked for either.
+        self.assertIn("cabinet", seg._VOCAB_SET)
+        self.assertIn("floor lamp", seg._VOCAB_SET)
+        self.assertNotIn("cabinetfloor lamp", seg._VOCAB_SET)
+
 
 class DedupeTests(unittest.TestCase):
     @staticmethod
@@ -215,6 +222,77 @@ class BuildItemTests(unittest.TestCase):
         import base64, io
         crop = Image.open(io.BytesIO(base64.b64decode(item.crop_image.split(",", 1)[1])))
         self.assertLessEqual(max(crop.size), seg._THUMB_PX)
+
+
+def _rect_mask(h, w, x1, y1, x2, y2):
+    import numpy as np
+
+    m = np.zeros((h, w), dtype=bool)
+    m[y1:y2, x1:x2] = True
+    return m
+
+
+class SamMaskTests(unittest.TestCase):
+    """Mask selection and clean-up between SAM 2 and _build_item."""
+
+    def test_pad_box_grows_and_clips_to_the_image(self):
+        self.assertEqual(seg.pad_box([10, 10, 110, 60], 200, 100, 0.1), [0.0, 5.0, 120.0, 65.0])
+        self.assertEqual(seg.pad_box([0, 0, 200, 100], 200, 100, 0.1), [0.0, 0.0, 200.0, 100.0])
+
+    def test_picks_the_whole_piece_when_nearly_as_confident_as_a_part(self):
+        box = [10, 10, 90, 90]
+        part = _rect_mask(100, 100, 30, 30, 60, 60)    # the cushions
+        whole = _rect_mask(100, 100, 12, 12, 88, 88)   # the sofa
+        self.assertEqual(seg.select_best_mask([part, whole], [0.95, 0.88], box), 1)
+
+    def test_keeps_the_part_when_the_whole_is_much_less_likely(self):
+        box = [10, 10, 90, 90]
+        part = _rect_mask(100, 100, 30, 30, 60, 60)
+        whole = _rect_mask(100, 100, 12, 12, 88, 88)
+        self.assertEqual(seg.select_best_mask([part, whole], [0.95, 0.5], box), 0)
+
+    def test_a_mask_spilling_out_of_the_box_is_not_picked(self):
+        box = [40, 40, 60, 60]
+        inside = _rect_mask(100, 100, 42, 42, 58, 58)
+        wall = _rect_mask(100, 100, 0, 0, 100, 100)
+        self.assertEqual(seg.select_best_mask([inside, wall], [0.8, 0.9], box), 0)
+
+    def test_clean_mask_clips_drops_strays_and_fills_pinholes(self):
+        mask = _rect_mask(100, 100, 20, 20, 80, 80)
+        mask[50, 50] = False                     # SAM 2 pin-hole
+        mask[0:5, 0:5] = True                    # blob outside the box
+        mask[22:24, 85:87] = True                # small stray inside the box
+        cleaned = seg.clean_mask(mask, [10, 10, 90, 90])
+        self.assertTrue(cleaned[50, 50])
+        self.assertFalse(cleaned[0:5, 0:5].any())
+        self.assertFalse(cleaned[22:24, 85:87].any())
+        self.assertTrue(cleaned[20:80, 20:80].all())
+
+    def test_clean_mask_keeps_a_big_real_gap(self):
+        mask = _rect_mask(100, 100, 20, 20, 80, 80)
+        mask[35:65, 35:65] = False               # the gap in a chair back
+        cleaned = seg.clean_mask(mask, [10, 10, 90, 90])
+        self.assertFalse(cleaned[50, 50])
+
+    def test_lamp_pixels_leave_the_nightstand(self):
+        nightstand = {"box": (0.2, 0.5, 0.6, 0.9), "mask": _rect_mask(100, 100, 20, 30, 60, 90)}
+        lamp = {"box": (0.3, 0.2, 0.45, 0.6), "mask": _rect_mask(100, 100, 30, 20, 45, 60)}
+        seg.resolve_overlaps([nightstand, lamp])
+        self.assertFalse(nightstand["mask"][40, 35])
+        self.assertTrue(lamp["mask"][40, 35])
+
+    def test_bed_keeps_the_pillows_inside_its_box(self):
+        bed = {"box": (0.1, 0.4, 0.9, 0.9), "mask": _rect_mask(100, 100, 10, 40, 90, 90)}
+        pillow = {"box": (0.2, 0.45, 0.4, 0.55), "mask": _rect_mask(100, 100, 20, 45, 40, 55)}
+        seg.resolve_overlaps([bed, pillow])
+        self.assertTrue(bed["mask"][50, 30])
+        self.assertTrue(pillow["mask"][50, 30])
+
+    def test_settle_masks_grows_the_box_to_cover_the_mask(self):
+        mask = Image.fromarray(_rect_mask(100, 100, 18, 20, 80, 95).astype("uint8") * 255, mode="L")
+        dets = [{"box": (0.2, 0.2, 0.8, 0.9), "mask": mask}]
+        seg._settle_masks(dets, 100, 100)
+        self.assertEqual(dets[0]["box"], (0.18, 0.2, 0.8, 0.95))
 
 
 if __name__ == "__main__":

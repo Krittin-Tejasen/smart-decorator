@@ -11,3 +11,4 @@ segmentation_results/
 checkpoints/
 *.pt
 *.pth
+compare/

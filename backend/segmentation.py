@@ -72,6 +72,11 @@ Env vars
   SEGMENTATION_DEVICE       Force "cuda" or "cpu" (default: auto-detect via torch.cuda.is_available())
   SAM_BOX_THRESHOLD         Confidence threshold for detection boxes (default: 0.30)
   SAM_TEXT_THRESHOLD        Text-matching threshold for Grounding DINO (default: 0.25)
+  SAM_BOX_PAD               Grow each DINO box by this share of its size before SAM 2 (default: 0.05)
+  SAM_MULTIMASK             1 = ask SAM 2 for 3 candidate masks and pick the whole object,
+                            0 = SAM 2's single default mask (old behaviour) (default: 1)
+  SAM_MASK_SCORE_MARGIN     How far below the best candidate's score a larger mask may be and
+                            still be picked (default: 0.15)
   SEGMENTATION_RESULTS_DIR  Folder to persist each result as JSON (default: segmentation_results)
   GEMINI_API_KEY            Already used by /generate-room
   GEMINI_VISION_MODEL       Gemini model for bbox detection fallback (default: gemini-3.6-flash)
@@ -105,7 +110,7 @@ _FURNITURE_PROMPT = (
     "sofa . couch . armchair . chair . dining chair . office chair . stool . bench . ottoman . "
     "coffee table . dining table . side table . console table . desk . "
     "bed . headboard . nightstand . dresser . wardrobe . bookshelf . bookcase . "
-    "cabinet"
+    "cabinet . "
     "floor lamp . table lamp . pendant lamp . chandelier . "
     "rug . carpet . curtain . blinds . "
     "plant pot . artwork . painting . mirror . vase . decoration . "
@@ -465,6 +470,128 @@ def parse_gemini_items(items: list) -> list[dict]:
     return detections
 
 
+# ── SAM 2 mask selection / clean-up (pure functions — unit-tested) ─────────
+# A box-only prompt with multimask_output=False often came back with one part
+# of the piece (a sofa's cushions, a bed's frame) and DINO's tight box clipped
+# legs and arms; the raw mask also carried stray blobs of wall/floor and the
+# lamp standing on a nightstand. These helpers fix that between SAM 2 and
+# _build_item. Masks here are numpy bool arrays, (H, W), full image size.
+
+# Below this share of the largest blob, a connected region is a stray blob
+# (a patch of wall, a shadow), not part of the piece.
+_MIN_COMPONENT_SHARE = 0.25
+# Enclosed holes smaller than this share of the mask are SAM 2 noise and get
+# filled; bigger ones (the gap in a chair back) are real and stay.
+_MAX_HOLE_SHARE = 0.02
+# A mask with more than this share of its pixels outside the padded box has
+# grabbed the wall or floor around the piece.
+_MAX_MASK_LEAK = 0.2
+
+
+def pad_box(box: list[float], W: int, H: int, pad: float) -> list[float]:
+    """Grow a pixel (x1, y1, x2, y2) box by `pad` × its size on every side,
+    clipped to the image. DINO's boxes are tight and SAM 2 rarely paints outside
+    the box it's given, so a chair leg past the box edge was cut off."""
+    x1, y1, x2, y2 = box
+    dx, dy = (x2 - x1) * pad, (y2 - y1) * pad
+    return [max(0.0, x1 - dx), max(0.0, y1 - dy), min(float(W), x2 + dx), min(float(H), y2 + dy)]
+
+
+def _box_slices(box: list[float]) -> tuple[slice, slice]:
+    x1, y1, x2, y2 = (int(round(v)) for v in box)
+    return slice(y1, y2), slice(x1, x2)
+
+
+def select_best_mask(masks, scores, box: list[float], margin: float = 0.15) -> int:
+    """Index of the candidate that is the WHOLE piece.
+
+    SAM 2's three candidates for a box are roughly subpart / part / whole.
+    Drop the ones that spill well outside the box (they grabbed the wall), then
+    among those scored within `margin` of the best, take the largest: when SAM
+    is nearly as sure of the whole sofa as of its cushions, we want the sofa.
+    """
+    rows, cols = _box_slices(box)
+    candidates = []
+    for i, (mask, score) in enumerate(zip(masks, scores)):
+        total = int(mask.sum())
+        if total == 0:
+            continue
+        inside = int(mask[rows, cols].sum())
+        if 1 - inside / total > _MAX_MASK_LEAK:
+            continue
+        candidates.append((i, float(score), inside))
+
+    if not candidates:
+        return max(range(len(scores)), key=lambda i: float(scores[i]))
+
+    top = max(score for _i, score, _area in candidates)
+    return max(
+        (c for c in candidates if c[1] >= top - margin), key=lambda c: c[2]
+    )[0]
+
+
+def clean_mask(mask, box: list[float]):
+    """Clip to the (padded) box, drop stray blobs, fill pin-holes."""
+    import cv2
+    import numpy as np
+
+    rows, cols = _box_slices(box)
+    clipped = np.zeros_like(mask, dtype=bool)
+    clipped[rows, cols] = mask[rows, cols]
+    if not clipped.any():
+        return clipped
+
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(clipped.astype("uint8"), connectivity=8)
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    keep = [i + 1 for i, area in enumerate(areas) if area >= _MIN_COMPONENT_SHARE * areas.max()]
+    cleaned = np.isin(labels, keep)
+
+    # Holes = background regions that don't touch the border of the box.
+    region = ~cleaned[rows, cols]
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(region.astype("uint8"), connectivity=4)
+    h, w = region.shape
+    max_hole = _MAX_HOLE_SHARE * cleaned.sum()
+    for i in range(1, n):
+        x, y, bw, bh, area = stats[i]
+        touches_border = x == 0 or y == 0 or x + bw == w or y + bh == h
+        if not touches_border and area <= max_hole:
+            cleaned[rows, cols][labels == i] = True
+    return cleaned
+
+
+def resolve_overlaps(dets: list[dict]) -> None:
+    """Give pixels claimed by two masks to the piece in front, in place.
+
+    `dets` are {"box": normalised xyxy, "mask": bool array or None}. When one
+    box sits inside the other (pillows on a bed, a vase on a shelf) both keep
+    the shared pixels: the bed card should show its pillows. Otherwise the
+    smaller box is taken to be in front (the lamp on the nightstand, the chair
+    against the table) and the larger one gives those pixels up.
+    """
+    for a in dets:
+        for b in dets:
+            if a is b or a["mask"] is None or b["mask"] is None:
+                continue
+            area_a = (a["box"][2] - a["box"][0]) * (a["box"][3] - a["box"][1])
+            area_b = (b["box"][2] - b["box"][0]) * (b["box"][3] - b["box"][1])
+            if area_b >= area_a:
+                continue  # only the larger piece gives pixels up
+            _iou, containment = _box_iou_and_containment(a["box"], b["box"])
+            if containment > 0.8:
+                continue  # b sits inside a's box — a keeps them
+            a["mask"] = a["mask"] & ~b["mask"]
+
+
+def mask_bbox(mask, W: int, H: int) -> tuple[float, float, float, float] | None:
+    """Normalised (x1, y1, x2, y2) extent of a bool mask, None if empty."""
+    import numpy as np
+
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    return float(xs.min() / W), float(ys.min() / H), float((xs.max() + 1) / W), float((ys.max() + 1) / H)
+
+
 # ── Local model loading (lazy singletons, loaded once per process) ─────────
 
 _model_lock = threading.Lock()
@@ -598,6 +725,10 @@ def _segment_boxes_with_sam2_local(
 
     predictor, device = _get_sam2_predictor()
     image_np = np.array(img.convert("RGB"))
+    W, H = img.size
+    box_pad = float(os.getenv("SAM_BOX_PAD", "0.05"))
+    multimask = os.getenv("SAM_MULTIMASK", "1") != "0"
+    margin = float(os.getenv("SAM_MASK_SCORE_MARGIN", "0.15"))
 
     autocast_ctx = (
         torch.autocast("cuda", dtype=torch.bfloat16)
@@ -610,10 +741,13 @@ def _segment_boxes_with_sam2_local(
         predictor.set_image(image_np)
         for box in boxes_px:
             try:
-                masks, _scores, _logits = predictor.predict(
-                    box=np.array(box), multimask_output=False
+                padded = pad_box(box, W, H, box_pad)
+                masks, scores, _logits = predictor.predict(
+                    box=np.array(padded), multimask_output=multimask
                 )
-                mask_arr = (masks[0] > 0).astype("uint8") * 255
+                masks = masks > 0
+                best = select_best_mask(masks, scores, padded, margin) if multimask else 0
+                mask_arr = clean_mask(masks[best], padded).astype("uint8") * 255
                 masks_out.append(Image.fromarray(mask_arr, mode="L"))
             except Exception as exc:
                 print(f"[segmentation] SAM 2 failed on box {box}: {exc}")
@@ -704,6 +838,28 @@ def _persist_result(result: SegmentationResult) -> str | None:
         return None
 
 
+def _settle_masks(detections: list[dict], W: int, H: int) -> None:
+    """Split shared pixels between overlapping masks, then grow each box to
+    cover its whole mask — the padded SAM 2 prompt may reach past DINO's box,
+    and the crop/cut-out are cut from the box."""
+    import numpy as np
+
+    with_masks = [d for d in detections if d["mask"] is not None]
+    if not with_masks:
+        return
+    for d in with_masks:
+        d["mask"] = np.asarray(d["mask"].convert("L")) > 127
+    resolve_overlaps(with_masks)
+    for d in with_masks:
+        extent = mask_bbox(d["mask"], W, H)
+        if extent is not None:
+            d["box"] = (
+                min(d["box"][0], extent[0]), min(d["box"][1], extent[1]),
+                max(d["box"][2], extent[2]), max(d["box"][3], extent[3]),
+            )
+        d["mask"] = Image.fromarray(d["mask"].astype("uint8") * 255, mode="L")
+
+
 async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationResult:
     """
     Public helper — also called from main.py's /generate-room when segment=true.
@@ -778,6 +934,7 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
     # keep the most confident one. Then largest first, so the big pieces
     # (sofa, bed) lead a list of cards instead of a stray vase.
     detections = dedupe_detections(detections)
+    _settle_masks(detections, W, H)
     detections.sort(
         key=lambda d: (d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1]), reverse=True
     )
