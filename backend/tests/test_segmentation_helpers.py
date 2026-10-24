@@ -281,12 +281,46 @@ class SamMaskTests(unittest.TestCase):
         self.assertFalse(nightstand["mask"][40, 35])
         self.assertTrue(lamp["mask"][40, 35])
 
-    def test_bed_keeps_the_pillows_inside_its_box(self):
+    def test_pillows_leave_the_bed_they_sit_on(self):
         bed = {"box": (0.1, 0.4, 0.9, 0.9), "mask": _rect_mask(100, 100, 10, 40, 90, 90)}
         pillow = {"box": (0.2, 0.45, 0.4, 0.55), "mask": _rect_mask(100, 100, 20, 45, 40, 55)}
         seg.resolve_overlaps([bed, pillow])
-        self.assertTrue(bed["mask"][50, 30])
+        self.assertFalse(bed["mask"][50, 30])
+        self.assertTrue(bed["mask"][70, 60])
         self.assertTrue(pillow["mask"][50, 30])
+
+    def test_the_piece_in_front_gains_nothing(self):
+        lamp = {"label": "floor lamp", "box": (0.4, 0.1, 0.6, 0.9), "mask": _rect_mask(100, 100, 40, 10, 60, 90)}
+        pot = {"label": "plant pot", "box": (0.35, 0.7, 0.55, 0.9), "mask": _rect_mask(100, 100, 35, 70, 55, 90)}
+        pot_before = pot["mask"].copy()
+        seg.resolve_overlaps([lamp, pot])
+        self.assertTrue((pot["mask"] == pot_before).all())
+        self.assertFalse(lamp["mask"][80, 45])
+        self.assertTrue(lamp["mask"][30, 50])
+
+    def test_a_chair_keeps_its_seat_cushion(self):
+        chair = {"label": "armchair", "box": (0.2, 0.2, 0.8, 0.9), "mask": _rect_mask(100, 100, 20, 20, 80, 90)}
+        seat = {"label": "cushion", "box": (0.3, 0.5, 0.7, 0.65), "mask": _rect_mask(100, 100, 30, 50, 70, 65)}
+        seg.resolve_overlaps([chair, seat])
+        self.assertTrue(chair["mask"][55, 50])
+
+    def test_a_piece_that_loses_most_of_its_mask_is_marked_swallowed(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        lamp = {"label": "floor lamp", "box": (0.4, 0.1, 0.6, 0.5), "mask": img(_rect_mask(100, 100, 40, 10, 60, 50))}
+        shade = {"label": "pendant lamp", "box": (0.4, 0.1, 0.6, 0.3), "mask": img(_rect_mask(100, 100, 40, 10, 60, 30))}
+        sofa = {"label": "sofa", "box": (0.0, 0.5, 1.0, 1.0), "mask": img(_rect_mask(100, 100, 0, 50, 100, 100))}
+        seg._settle_masks([lamp, shade, sofa], 100, 100)
+        self.assertFalse(lamp["swallowed"])
+        self.assertFalse(sofa["swallowed"])
+        lamp2 = {"label": "floor lamp", "box": (0.4, 0.1, 0.6, 0.5), "mask": img(_rect_mask(100, 100, 40, 10, 60, 50))}
+        vase = {"label": "vase", "box": (0.45, 0.2, 0.55, 0.45), "mask": img(_rect_mask(100, 100, 40, 12, 60, 50))}
+        seg._settle_masks([lamp2, vase], 100, 100)
+        self.assertTrue(lamp2["swallowed"])
+
+    def test_pillows_are_mask_only(self):
+        self.assertTrue(seg.is_mask_only_label("cushion"))
+        self.assertFalse(seg.is_furniture_label("throw pillow"))
+        self.assertTrue(seg.is_furniture_label("sofa"))
 
     def test_clean_mask_leaves_shelf_openings_open_without_hole_filling(self):
         shelf = _rect_mask(100, 100, 20, 20, 80, 80)
