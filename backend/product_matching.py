@@ -10,7 +10,7 @@ Pipeline (choices follow pinecone-evaluation/EVALUATION_REPORT_EXPANDED_TH.md):
                  ─► Pinecone query, filtered by furniture_type (+ price range)
                  ─► catalog rows from Supabase ─► one card per product
                     (collapse rows that share an image id)
-                 ─► size as a soft re-rank, never a hard filter
+                 ─► size, colour and material as soft re-ranks, never hard filters
                  ─► drop matches below MATCH_MIN_SCORE ─► drop dead links
 
 - Filtering by type raised Hit@5 from 53.5% to 68.0% on room-like queries, so
@@ -20,6 +20,11 @@ Pipeline (choices follow pinecone-evaluation/EVALUATION_REPORT_EXPANDED_TH.md):
   the response says which was used. A user's price range is never relaxed.
 - A width filter helped only while the width was exact (84.5%) and fell to
   ~24% (worse than no filter) with a 10% error, so width only nudges ranking.
+- The item's colour and material (measured/guessed in segmentation, see
+  feature_extraction.py) nudge the ranking by a few hundredths, scaled by
+  furniture type (match_features.py). They never change `score`, so the
+  threshold and confidence labels still mean picture similarity only, and they
+  never remove a candidate: the catalog's colour/material tags are too coarse.
 - Product photos are IKEA's own URLs and the cutout arrives in the request:
   nothing here reads or writes object storage.
 """
@@ -36,6 +41,13 @@ from PIL import Image
 
 from app.core.config import settings
 from app.services.furniture_types import FURNITURE_TYPES, image_group_key, label_to_type
+from match_features import (
+    color_fit,
+    feature_penalty,
+    material_fit,
+    parse_item_colors,
+    parse_item_materials,
+)
 
 router = APIRouter(tags=["product-matching"])
 
@@ -120,15 +132,31 @@ class Candidate:
     score: float  # cosine similarity of the images, what the threshold applies to
     rank_score: float = field(init=False)
     target_width_cm: float | None = None
+    # The detected item's colours [(catalog colour word, share)] and materials
+    # [(catalog material group, confidence)] — empty when the app sent none.
+    item_colors: tuple = ()
+    item_materials: tuple = ()
+    furniture_type: str | None = None
+    color_fit: float | None = field(init=False, default=None)
+    material_fit: float | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
-        self.rank_score = self.score - size_penalty(self.target_width_cm, self.row.get("width_cm"))
+        self.color_fit = color_fit(self.item_colors, self.row.get("color_extracted"))
+        self.material_fit = material_fit(self.item_materials, self.row)
+        self.rank_score = (
+            self.score
+            - size_penalty(self.target_width_cm, self.row.get("width_cm"))
+            - feature_penalty(self.furniture_type, self.color_fit, self.material_fit)
+        )
 
 
 def collapse_products(
     matches: list[dict[str, Any]],
     rows: dict[str, dict[str, Any]],
     target_width_cm: float | None = None,
+    item_colors: tuple = (),
+    item_materials: tuple = (),
+    furniture_type: str | None = None,
 ) -> list[Candidate]:
     """One candidate per product (image group), best ranking first.
 
@@ -139,7 +167,14 @@ def collapse_products(
         row = rows.get(str(match["id"]))
         if row is None:
             continue
-        candidate = Candidate(row=row, score=float(match["score"]), target_width_cm=target_width_cm)
+        candidate = Candidate(
+            row=row,
+            score=float(match["score"]),
+            target_width_cm=target_width_cm,
+            item_colors=item_colors,
+            item_materials=item_materials,
+            furniture_type=furniture_type,
+        )
         key = image_group_key(row.get("main_image"), row.get("sku"))
         current = best.get(key)
         if current is None or _better(candidate, current):
@@ -188,6 +223,12 @@ def to_product_match(candidate: Candidate, link_ok: bool | None) -> dict[str, An
         "country_code": row.get("country_code") or None,
         "score": round(candidate.score, 4),
         "confidence": confidence_of(candidate.score),
+        # How well this product's colour / material agree with the item
+        # (0..1; null = nothing to compare). Already reflected in the order.
+        "fit": {
+            "color": None if candidate.color_fit is None else round(candidate.color_fit, 3),
+            "material": None if candidate.material_fit is None else round(candidate.material_fit, 3),
+        },
         "link_ok": link_ok,
     }
 
@@ -255,6 +296,8 @@ def find_candidates(
     top_k: int = 5,
     min_score: float | None = None,
     furniture_type: str | None = None,
+    item_colors: tuple = (),
+    item_materials: tuple = (),
 ) -> MatchResult:
     """Blocking part of a match (CLIP, Pinecone, Supabase); run it in a thread."""
     # Imported here so the app starts (and other endpoints work) even before
@@ -273,7 +316,9 @@ def find_candidates(
     for level in levels:
         matches = query_similar(vector, top_k=_CANDIDATE_POOL, metadata_filter=level.filter, dedupe=False)
         rows = fetch_products_by_ids([str(m["id"]) for m in matches])
-        collapsed = collapse_products(matches, rows, target_width_cm)
+        collapsed = collapse_products(
+            matches, rows, target_width_cm, item_colors, item_materials, furniture_type
+        )
         passing = [c for c in collapsed if c.score >= threshold]
         result = MatchResult(furniture_type, level.name, passing, len(collapsed) - len(passing))
         # Relax only when a level found nothing: two products of the right
@@ -293,6 +338,8 @@ async def match_products(
     in_stock_only: bool = Form(False),
     top_k: int = Form(5, ge=1, le=20),
     furniture_type: str | None = Form(None, description="A type the user picked; used instead of the one guessed from the label."),
+    colors: str | None = Form(None, description='JSON [{"catalog_color": "brown", "share": 0.6}, ...] from the item features; nudges the ranking.'),
+    materials: str | None = Form(None, description='JSON [{"name": "wood", "confidence": 0.9}, ...] from the item features; nudges the ranking.'),
 ):
     if min_price is not None and max_price is not None and min_price > max_price:
         raise HTTPException(status_code=422, detail="min_price is greater than max_price.")
@@ -329,6 +376,8 @@ async def match_products(
             in_stock_only=in_stock_only,
             top_k=top_k,
             furniture_type=furniture_type,
+            item_colors=tuple(parse_item_colors(colors)),
+            item_materials=tuple(parse_item_materials(materials)),
         )
     except RuntimeError as exc:  # missing PINECONE_API_KEY / SUPABASE_* on this machine
         raise HTTPException(status_code=503, detail=str(exc)) from exc
