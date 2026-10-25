@@ -127,7 +127,11 @@ def compare(path: Path) -> None:
     W, H = img.size
     # Same order as run_segmentation: SAM 2 on every candidate, then the
     # pipeline's own filtering, size checks and (mask-based) dedupe.
-    found = [d for d in seg._detect_with_grounding_dino_local(img) if seg.is_candidate_label(d["label"])]
+    # Openings stay in: select_detections uses them to drop what's outside.
+    found = [
+        d for d in seg._detect_with_grounding_dino_local(img)
+        if seg.is_candidate_label(d["label"]) or d["label"] in seg._OPENING_LABELS
+    ]
     after_raw = seg._segment_boxes_with_sam2_local(
         img, [d["box"] for d in found], [d["label"] for d in found]
     )

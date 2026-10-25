@@ -125,7 +125,9 @@ _FURNITURE_PROMPT = (
     # nearest furniture word ("mirror") and a window onto "curtain". Giving it
     # the truthful label lets us drop those detections below. They're what the
     # generator must preserve, not products to shop for.
-    "door . window ."
+    # "doorway" is the opening itself: what stands in it, no lower than its
+    # sill, is outside the room (the garden chair seen through an open door).
+    "doorway . door . window ."
 )
 
 _VOCAB: tuple[str, ...] = tuple(p.strip() for p in _FURNITURE_PROMPT.split(".") if p.strip())
@@ -134,7 +136,9 @@ _MAX_PHRASE_WORDS = max(len(p.split()) for p in _VOCAB)
 
 # Architecture / fixtures that must never show up as a shoppable card — whether
 # they came from the DINO decoys above or from Gemini's "every item" answer.
-_NON_FURNITURE_LABELS = frozenset({"door", "window", "ceiling light", "air vent", "vent"})
+_NON_FURNITURE_LABELS = frozenset({"doorway", "door", "window", "ceiling light", "air vent", "vent"})
+# Openings something outside the room can be seen through.
+_OPENING_LABELS = frozenset({"doorway", "door"})
 
 # Segmented only to take their pixels away from what they sit on; never a card.
 _MASK_ONLY_LABELS = frozenset({"pillow", "cushion", "throw pillow"})
@@ -401,13 +405,33 @@ def canonicalize_label(raw: str) -> str:
     running this on e.g. "desk lamp" would wrongly return "desk".
     """
     words = raw.lower().split()
-    for architecture in ("door", "window"):
+    # DINO decodes word pieces: "head ##board" is "headboard", and a lone
+    # "##board" lost its first half.
+    joined: list[str] = []
+    for w in words:
+        if w.startswith("##") and joined:
+            joined[-1] += w[2:]
+        else:
+            joined.append(w)
+    words = joined
+    for architecture in ("doorway", "door", "window"):
         if architecture in words:
             return architecture
     for i in range(len(words)):
         for n in range(min(_MAX_PHRASE_WORDS, len(words) - i), 0, -1):
             phrase = " ".join(words[i : i + n])
             if phrase in _VOCAB_SET:
+                return phrase
+    # Half a word ("plant" of "plant pot", "book" of "bookshelf", "##board"
+    # of "headboard"): the vocabulary phrase it starts or ends.
+    for w in words:
+        piece = w.lstrip("#")
+        if not piece:
+            continue
+        for phrase in _VOCAB:
+            if w.startswith("##") and phrase.endswith(piece):
+                return phrase
+            if not w.startswith("##") and phrase.startswith(piece):
                 return phrase
     return " ".join(words) or "furniture"
 
@@ -485,7 +509,13 @@ def dedupe_detections(dets: list[dict]) -> list[dict]:
         else:
             m_det, m_other = masks[id(det)], masks[id(kept[duplicate])]
             if m_det is not None and m_other is not None and m_det.sum() > m_other.sum():
-                kept[duplicate] = det
+                # The more complete view, under the more confident name.
+                # Keep the union box: a bed deduped against its headboard must
+                # keep the bed's box, or the duvet no longer sits inside it.
+                a, b = kept[duplicate]["box"], det["box"]
+                union = (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+                kept[duplicate] = {**kept[duplicate], "box": union, "mask": det["mask"]}
+                masks[id(kept[duplicate])] = m_det
     return kept
 
 
@@ -746,18 +776,35 @@ def _get_sam2_predictor() -> tuple[Any, str]:
 
 # ── Stage 1: Grounding DINO (image + text prompt → boxes), run locally ─────
 
+# A second, doorway-only pass: in the full prompt DINO often boxes just the
+# door leaf and misses the opening beside it. Labelled "doorway" either way.
+_OPENING_PROMPT = "doorway . open door ."
+# Doorways score lower than furniture; the opening filters (real_openings and
+# the sill check) catch what a lower bar lets in.
+_OPENING_BOX_THRESHOLD = 0.25
+
+
 def _detect_with_grounding_dino_local(img: Image.Image) -> list[dict]:
+    openings = [
+        {**d, "label": "doorway"}
+        for d in _run_grounding_dino(img, _OPENING_PROMPT, _OPENING_BOX_THRESHOLD)
+    ]
+    return _run_grounding_dino(img, _FURNITURE_PROMPT) + openings
+
+
+def _run_grounding_dino(img: Image.Image, prompt: str, box_threshold: float | None = None) -> list[dict]:
     import torch
 
     processor, model, device = _get_grounding_dino()
-    box_threshold = float(os.getenv("SAM_BOX_THRESHOLD", "0.30"))
+    if box_threshold is None:
+        box_threshold = float(os.getenv("SAM_BOX_THRESHOLD", "0.30"))
     text_threshold = float(os.getenv("SAM_TEXT_THRESHOLD", "0.25"))
 
     # The predictor/model objects are shared singletons — one inference at a
     # time (two overlapping requests would otherwise race on SAM 2's
     # set_image state and mix up each other's masks).
     with _inference_lock:
-        inputs = processor(images=img, text=_FURNITURE_PROMPT, return_tensors="pt").to(device)
+        inputs = processor(images=img, text=prompt, return_tensors="pt").to(device)
         with torch.no_grad():
             outputs = model(**inputs)
 
@@ -926,12 +973,18 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
     merges the same object reported twice (chair as "armchair" + "office
     chair"). Pillows come back separately: they skip dedupe — a cushion box
     must never knock out its sofa — and only exist to be cut out of the sofa
-    or bed in _settle_masks.
+    or bed in _settle_masks. Blankets skip dedupe too: SAM 2 paints a duvet
+    box as nearly the whole bed, and the "duplicate" swallowed the bed.
+    Anything seen through an open doorway is outside the room and dropped.
     """
     detections: list[dict] = []
+    openings: list[tuple] = []
     for det, mask_img in zip(raw, mask_imgs):
         box = det.get("box", [])
-        if len(box) != 4 or not is_candidate_label(det["label"]):
+        if len(box) != 4:
+            continue
+        is_opening = det["label"] in _OPENING_LABELS
+        if not (is_opening or is_candidate_label(det["label"])):
             continue
 
         x1, y1, x2, y2 = (float(v) for v in box)
@@ -945,6 +998,9 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
         x2, y2 = min(1.0, x2), min(1.0, y2)
         if x2 - x1 < 0.01 or y2 - y1 < 0.01:
             continue
+        if is_opening:
+            openings.append((x1, y1, x2, y2))
+            continue
         if (x2 - x1) * (y2 - y1) * 100 < _MIN_AREA_PCT_BY_LABEL.get(det["label"], 0.0):
             continue
 
@@ -957,12 +1013,52 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
             }
         )
 
+    openings = real_openings(openings, [d["box"] for d in detections])
+    detections = [d for d in detections if not seen_through_opening(d["box"], openings)]
     mask_only = [d for d in detections if is_mask_only_label(d["label"])]
-    furniture = dedupe_detections([d for d in detections if not is_mask_only_label(d["label"])])
-    furniture = merge_parts_into_hosts(furniture)
+    parts = [d for d in detections if d["label"] in _PART_ONLY_LABELS]
+    furniture = dedupe_detections(
+        [d for d in detections if not is_mask_only_label(d["label"]) and d["label"] not in _PART_ONLY_LABELS]
+    )
+    furniture = merge_parts_into_hosts(furniture + parts)
     # A blanket that didn't join a bed is cut out of whatever it lies on.
     mask_only += [d for d in furniture if d["label"] in _PART_ONLY_LABELS]
     return [d for d in furniture if d["label"] not in _PART_ONLY_LABELS], mask_only
+
+
+# A box this far inside a doorway, standing no lower than the doorway's sill
+# (+ this share of the image height), is seen through it. A chair in front of
+# the door reaches below the sill and stays.
+_OPENING_CONTAINMENT = 0.8
+_OPENING_SILL_MARGIN = 0.01
+
+
+# An opening reaching this close to the top of the photo is a glass wall or the
+# room's own door, not a doorway; what stands before it is inside the room.
+_OPENING_MIN_TOP = 0.05
+# An "opening" this much the same box as a piece of furniture is that piece
+# (a four-poster's frame).
+_OPENING_MAX_FURNITURE_IOU = 0.5
+
+
+def real_openings(openings: list[tuple], furniture_boxes: list[tuple]) -> list[tuple]:
+    return [
+        o for o in openings
+        if o[1] > _OPENING_MIN_TOP
+        and all(_box_iou_and_containment(o, b)[0] < _OPENING_MAX_FURNITURE_IOU for b in furniture_boxes)
+    ]
+
+
+def seen_through_opening(box: tuple, openings: list[tuple]) -> bool:
+    for opening in openings:
+        _iou, inside = _box_iou_and_containment(box, opening)
+        box_area = (box[2] - box[0]) * (box[3] - box[1])
+        opening_area = (opening[2] - opening[0]) * (opening[3] - opening[1])
+        if box_area >= opening_area:
+            continue  # the containment is the opening's, not the box's
+        if inside >= _OPENING_CONTAINMENT and box[3] <= opening[3] + _OPENING_SILL_MARGIN:
+            return True
+    return False
 
 
 # A piece whose box sits this far inside a bed's or sofa's box, and whose mask
@@ -997,6 +1093,18 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
     if not hosts:
         return dets
     host_masks = {id(h): as_bool(h["mask"]) for h in hosts}
+    # A four-poster comes back as two beds: the frame and the mattress inside
+    # it. The smaller one joins the larger.
+    area = lambda d: (d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1])
+    for small in sorted(hosts, key=area):
+        for big in hosts:
+            if big is small or big["label"] != small["label"] or area(big) <= area(small):
+                continue
+            if _box_iou_and_containment(small["box"], big["box"])[1] >= _PART_BOX_CONTAINMENT:
+                host_masks[id(big)] = host_masks[id(big)] | host_masks[id(small)]
+                dets = [d for d in dets if d is not small]
+                hosts = [h for h in hosts if h is not small]
+                break
     kept = []
     for det in dets:
         host_of = None

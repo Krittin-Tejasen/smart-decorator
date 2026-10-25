@@ -153,7 +153,9 @@ class DedupeTests(unittest.TestCase):
         partial["mask"] = img(_rect_mask(100, 100, 30, 17, 38, 24))
         whole["mask"] = img(_rect_mask(100, 100, 30, 17, 38, 27))
         kept = seg.dedupe_detections([partial, whole])
-        self.assertEqual(kept, [whole])
+        self.assertEqual(len(kept), 1)
+        self.assertIs(kept[0]["mask"], whole["mask"])
+        self.assertEqual(kept[0]["confidence"], 0.39)
 
     def test_a_bench_that_sam_painted_as_the_bed_base_is_dropped(self):
         img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
@@ -373,6 +375,55 @@ class SamMaskTests(unittest.TestCase):
         fold = {"label": "cushion", "box": (0.25, 0.4, 0.45, 0.8), "mask": _rect_mask(100, 100, 25, 40, 45, 80)}
         seg.resolve_overlaps([bed, fold])
         self.assertTrue(bed["mask"][60, 35])
+
+    def test_a_duvet_mask_as_big_as_the_bed_does_not_replace_the_bed(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = {"label": "bed", "confidence": 0.8, "box": (0.3, 0.4, 0.7, 0.8), "mask": img(_rect_mask(100, 100, 30, 40, 70, 80))}
+        duvet = {"label": "blanket", "confidence": 0.33, "box": (0.3, 0.55, 0.7, 0.75), "mask": img(_rect_mask(100, 100, 30, 40, 70, 81))}
+        furniture, _ = seg.select_detections([bed, duvet], [bed["mask"], duvet["mask"]], 100, 100)
+        self.assertEqual([d["label"] for d in furniture], ["bed"])
+
+    def test_a_bed_deduped_against_its_headboard_still_gets_the_duvet(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        # SAM 2 painted only the headboard for the bed box; the headboard box
+        # got a slightly bigger mask of the same thing.
+        bed = {"label": "bed", "confidence": 0.77, "box": (0.3, 0.37, 0.7, 0.6), "mask": img(_rect_mask(100, 100, 38, 37, 62, 44))}
+        head = {"label": "headboard", "confidence": 0.54, "box": (0.38, 0.36, 0.62, 0.44), "mask": img(_rect_mask(100, 100, 38, 36, 62, 44))}
+        duvet = {"label": "blanket", "confidence": 0.32, "box": (0.31, 0.43, 0.69, 0.52), "mask": img(_rect_mask(100, 100, 31, 43, 69, 52))}
+        furniture, mask_only = seg.select_detections(
+            [bed, head, duvet], [bed["mask"], head["mask"], duvet["mask"]], 100, 100
+        )
+        self.assertEqual([d["label"] for d in furniture], ["bed"])
+        self.assertEqual(mask_only, [])
+        self.assertTrue((np.asarray(furniture[0]["mask"]) > 127)[48, 50])
+
+    def test_a_four_poster_reported_twice_is_one_bed(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        frame = {"label": "bed", "confidence": 0.45, "box": (0.3, 0.2, 0.7, 0.8), "mask": img(_rect_mask(100, 100, 30, 20, 32, 80))}
+        mattress = {"label": "bed", "confidence": 0.53, "box": (0.31, 0.5, 0.69, 0.79), "mask": img(_rect_mask(100, 100, 33, 50, 68, 79))}
+        furniture, _ = seg.select_detections([frame, mattress], [frame["mask"], mattress["mask"]], 100, 100)
+        self.assertEqual(len(furniture), 1)
+        merged = np.asarray(furniture[0]["mask"]) > 127
+        self.assertTrue(merged[60, 31] and merged[60, 50])
+
+    def test_the_garden_chair_seen_through_the_doorway_is_dropped(self):
+        doorway = (0.15, 0.27, 0.30, 0.74)
+        self.assertTrue(seg.seen_through_opening((0.22, 0.57, 0.30, 0.70), [doorway]))
+        # A chair in front of the door reaches below its sill.
+        self.assertFalse(seg.seen_through_opening((0.18, 0.55, 0.28, 0.90), [doorway]))
+
+    def test_glass_walls_and_bed_frames_are_not_doorways(self):
+        doorway = (0.15, 0.27, 0.30, 0.74)
+        glass_wall = (0.80, 0.0, 1.0, 0.96)
+        four_poster = (0.33, 0.23, 0.68, 0.78)
+        bed_box = (0.326, 0.236, 0.679, 0.779)
+        self.assertEqual(seg.real_openings([doorway, glass_wall, four_poster], [bed_box]), [doorway])
+
+    def test_word_pieces_are_rejoined(self):
+        self.assertEqual(seg.canonicalize_label("##board"), "headboard")
+        self.assertEqual(seg.canonicalize_label("head ##board"), "headboard")
+        self.assertEqual(seg.canonicalize_label("plant"), "plant pot")
+        self.assertEqual(seg.canonicalize_label("doorway"), "doorway")
 
     def test_blanket_is_never_a_card(self):
         self.assertFalse(seg.is_furniture_label("blanket"))
