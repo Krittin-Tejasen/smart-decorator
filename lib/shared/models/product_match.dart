@@ -1,10 +1,10 @@
 /// A catalogue product proposed as a match for one piece of furniture detected
 /// in the generated room.
 ///
-/// The fields mirror what the `ikea_furniture` table already has (main_title,
+/// The fields mirror what the `ikea_furniture` table has (main_title,
 /// main_image, thb_price, category, width_cm / depth_cm / height_cm, colour,
-/// material tags, in_stock, url) plus the similarity [score] product matching
-/// produces, so the real matcher can fill this in without the screens changing.
+/// material, in_stock, url) plus the image similarity [score] the matcher
+/// gives it. Built from the backend's POST /match-products with [fromJson].
 class ProductMatch {
   final String id;
   final String name;
@@ -49,6 +49,31 @@ class ProductMatch {
     this.isSample = false,
   });
 
+  /// One entry of `matches` in the /match-products response.
+  factory ProductMatch.fromJson(Map<String, dynamic> json) {
+    double? number(String key) => (json[key] as num?)?.toDouble();
+    String? text(String key) {
+      final value = json[key];
+      return value is String && value.trim().isNotEmpty ? value : null;
+    }
+
+    return ProductMatch(
+      id: json['id']?.toString() ?? '',
+      name: text('name') ?? 'Product',
+      imageUrl: text('image_url'),
+      price: number('price') ?? 0,
+      category: text('category') ?? '',
+      widthCm: number('width_cm'),
+      depthCm: number('depth_cm'),
+      heightCm: number('height_cm'),
+      colorName: text('color_name'),
+      material: text('material'),
+      inStock: json['in_stock'] as bool? ?? false,
+      url: text('url'),
+      score: number('score') ?? 0,
+    );
+  }
+
   /// "W 210 × D 90 × H 85 cm", or null when no dimension is known.
   String? get dimensionsLabel {
     final parts = <String>[
@@ -61,6 +86,31 @@ class ProductMatch {
 
   /// "94% match".
   String get scoreLabel => '${(score * 100).round()}% match';
+}
+
+/// A budget for matches, in THB. Either end may be open.
+class PriceRange {
+  final double? min;
+  final double? max;
+
+  const PriceRange({this.min, this.max});
+
+  /// Whether [price] falls inside the range.
+  bool contains(double price) => (min == null || price >= min!) && (max == null || price <= max!);
+
+  @override
+  bool operator ==(Object other) => other is PriceRange && other.min == min && other.max == max;
+
+  @override
+  int get hashCode => Object.hash(min, max);
+
+  /// "Under ฿2,000", "฿2,000–฿10,000", "Over ฿30,000".
+  String get label {
+    if (min == null && max == null) return 'Any price';
+    if (min == null) return 'Under ${formatBaht(max!)}';
+    if (max == null) return 'Over ${formatBaht(min!)}';
+    return '${formatBaht(min!)}–${formatBaht(max!)}';
+  }
 }
 
 /// "฿12,990" — whole baht with thousands separators.

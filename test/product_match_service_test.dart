@@ -1,7 +1,14 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_decorator/core/services/product_match_service.dart';
 import 'package:smart_decorator/shared/models/furniture_item.dart';
 import 'package:smart_decorator/shared/models/product_match.dart';
+import 'package:smart_decorator/shared/utils/data_url.dart';
+
+import 'support/sample_images.dart';
 
 FurnitureItem furniture(String label, {List<String> colors = const ['#725f4e', '#98826e', '#b9b1ac'], String id = '0'}) {
   return FurnitureItem(
@@ -17,6 +24,40 @@ FurnitureItem furniture(String label, {List<String> colors = const ['#725f4e', '
 }
 
 const service = SampleProductMatchService();
+
+/// Answers every request with [body] and remembers what was sent.
+class FakeAdapter implements HttpClientAdapter {
+  FakeAdapter(this.body, {this.status = 200});
+  final Map<String, dynamic> body;
+  final int status;
+  RequestOptions? lastRequest;
+
+  @override
+  Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
+    lastRequest = options;
+    return ResponseBody.fromString(jsonEncode(body), status, headers: {
+      Headers.contentTypeHeader: [Headers.jsonContentType],
+    });
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+Map<String, String> formFields(RequestOptions options) =>
+    {for (final field in (options.data as FormData).fields) field.key: field.value};
+
+FurnitureItem withImages(String label, {bool cutout = true, bool precise = true, bool crop = true}) => FurnitureItem(
+      id: '3',
+      label: label,
+      confidence: 0.8,
+      bbox: BoundingBox(xMin: 0, yMin: 0, xMax: 1, yMax: 1),
+      cropImage: crop ? kSampleCropDataUrl : '',
+      cutoutImage: cutout ? kSampleCutoutDataUrl : null,
+      maskImage: '',
+      maskPrecise: precise,
+      features: FurnitureFeatures(dominantColors: const [], areaPct: 5, aspectRatio: 1),
+    );
 
 void main() {
   group('sample matches', () {
@@ -120,6 +161,101 @@ void main() {
           expect(m.price % 100, 90, reason: '$label ${m.price}');
         }
       }
+    });
+  });
+
+  group('backend matches', () {
+    const response = {
+      'furniture_type': 'sofa',
+      'filter_level': 'type',
+      'matches': [
+        {
+          'id': '1042', 'name': 'KIVIK 3-seat sofa, Tibbleby beige/grey', 'image_url': 'https://www.ikea.com/x.jpg',
+          'price': 19990.0, 'category': 'Sofas', 'width_cm': 228.0, 'depth_cm': 95.0, 'height_cm': 83.0,
+          'color_name': 'beige', 'material': 'fabric', 'in_stock': true,
+          'url': 'https://www.ikea.com/gb/en/p/kivik-s19440533/', 'score': 0.9123, 'link_ok': true,
+        },
+        {'id': '7', 'name': 'Bare', 'price': null, 'score': 0.8},
+      ],
+    };
+
+    BackendProductMatchService serviceWith(FakeAdapter adapter) =>
+        BackendProductMatchService(dio: Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = adapter);
+
+    test('posts the item and reads the matches into ProductMatch', () async {
+      final adapter = FakeAdapter(response);
+      final matches = await serviceWith(adapter).matchesFor(withImages('sofa'));
+
+      expect(adapter.lastRequest!.path, '/match-products');
+      expect(formFields(adapter.lastRequest!), {'label': 'sofa', 'top_k': '5'});
+
+      final kivik = matches.first;
+      expect(kivik.name, 'KIVIK 3-seat sofa, Tibbleby beige/grey');
+      expect(kivik.price, 19990);
+      expect(kivik.dimensionsLabel, 'W 228 × D 95 × H 83 cm');
+      expect(kivik.scoreLabel, '91% match');
+      expect(kivik.url, 'https://www.ikea.com/gb/en/p/kivik-s19440533/');
+      expect(kivik.isSample, isFalse);
+
+      final bare = matches.last;
+      expect(bare.price, 0);
+      expect(bare.imageUrl, isNull);
+      expect(bare.dimensionsLabel, isNull);
+      expect(bare.inStock, isFalse);
+    });
+
+    test('sends the price range', () async {
+      final adapter = FakeAdapter(response);
+      await serviceWith(adapter).matchesFor(withImages('sofa'), price: const PriceRange(min: 2000, max: 10000));
+
+      final fields = formFields(adapter.lastRequest!);
+      expect(fields['min_price'], '2000.0');
+      expect(fields['max_price'], '10000.0');
+    });
+
+    test('a response without matches is an empty list', () async {
+      final matches = await serviceWith(FakeAdapter({'matches': []})).matchesFor(withImages('sofa'));
+      expect(matches, isEmpty);
+    });
+
+    test('server errors surface, so the screen can offer a retry', () async {
+      final service = serviceWith(FakeAdapter({'detail': 'PINECONE_API_KEY is not configured.'}, status: 503));
+      expect(service.matchesFor(withImages('sofa')), throwsA(isA<DioException>()));
+    });
+
+    test('sends the cut-out when the mask is real, otherwise the crop', () {
+      expect(BackendProductMatchService.imageFor(withImages('sofa')), decodeDataUrl(kSampleCutoutDataUrl));
+      expect(BackendProductMatchService.imageFor(withImages('sofa', precise: false)), decodeDataUrl(kSampleCropDataUrl));
+      expect(BackendProductMatchService.imageFor(withImages('sofa', cutout: false)), decodeDataUrl(kSampleCropDataUrl));
+      expect(BackendProductMatchService.imageFor(withImages('sofa', cutout: false, crop: false)), isNull);
+    });
+
+    test('an item with no image cannot be matched', () {
+      expect(
+        BackendProductMatchService(dio: Dio()).matchesFor(withImages('sofa', cutout: false, crop: false)),
+        throwsStateError,
+      );
+    });
+  });
+
+  group('price ranges', () {
+    test('labels and bounds', () {
+      expect(const PriceRange().label, 'Any price');
+      expect(const PriceRange(max: 2000).label, 'Under ฿2,000');
+      expect(const PriceRange(min: 2000, max: 10000).label, '฿2,000–฿10,000');
+      expect(const PriceRange(min: 30000).label, 'Over ฿30,000');
+      expect(const PriceRange(min: 2000, max: 10000).contains(10000), isTrue);
+      expect(const PriceRange(min: 2000, max: 10000).contains(10001), isFalse);
+      expect(const PriceRange(min: 1, max: 2), const PriceRange(min: 1, max: 2));
+    });
+
+    test('the sample matcher respects a range too', () async {
+      final all = await service.matchesFor(furniture('sofa'));
+      final cheapest = all.map((m) => m.price).reduce((a, b) => a < b ? a : b);
+      final cheap = await service.matchesFor(furniture('sofa'), price: PriceRange(max: cheapest));
+
+      expect(cheap.map((m) => m.price), [cheapest]);
+      expect(all.length, greaterThan(1));
     });
   });
 
