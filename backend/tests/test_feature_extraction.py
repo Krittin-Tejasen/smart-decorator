@@ -353,6 +353,20 @@ class ErrorLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(self.SECRET, out.getvalue())
         self.assertIn("402", out.getvalue())
 
+    async def test_the_api_key_is_sent_in_a_header_never_in_the_url(self):
+        import httpx
+        seen = {}
+
+        async def fake_post(self_, url, **kwargs):
+            seen.update(url=url, **kwargs)
+            return httpx.Response(200, json={"ok": True}, request=httpx.Request("POST", url))
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": self.SECRET}),                 patch.object(httpx.AsyncClient, "post", new=fake_post):
+            await fx._post_to_gemini({"contents": []})
+        self.assertNotIn(self.SECRET, seen["url"])
+        self.assertNotIn("params", seen)
+        self.assertEqual(seen["headers"], {"x-goog-api-key": self.SECRET})
+
     async def test_segmentation_logs_without_the_key_too(self):
         import contextlib
         item = SegmentationIntegrationTests().build()

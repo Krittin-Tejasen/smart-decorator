@@ -373,7 +373,9 @@ async def _post_to_gemini(body: dict) -> dict:
     async with httpx.AsyncClient(timeout=90) as client:
         response = await client.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            params={"key": api_key},
+            # In a header like the rest of the backend: a ?key= query parameter ends
+            # up in the URL that httpx quotes in every error message.
+            headers={"x-goog-api-key": api_key},
             json=body,
         )
         response.raise_for_status()
