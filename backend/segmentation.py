@@ -1023,7 +1023,35 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
     furniture = merge_parts_into_hosts(furniture + parts)
     # A blanket that didn't join a bed is cut out of whatever it lies on.
     mask_only += [d for d in furniture if d["label"] in _PART_ONLY_LABELS]
-    return [d for d in furniture if d["label"] not in _PART_ONLY_LABELS], mask_only
+    furniture = [d for d in furniture if d["label"] not in _PART_ONLY_LABELS]
+    relabel_bedside_tables(furniture)
+    return furniture, mask_only
+
+
+# DINO calls a nightstand "console table", "desk", "side table" or "stool" in
+# most bedrooms, which sends it to the wrong product category. A small table
+# standing at either edge of a bed, within the bed's height, is a nightstand.
+_BEDSIDE_LABELS = frozenset({"console table", "desk", "side table", "stool", "dresser", "cabinet"})
+_BEDSIDE_MAX_EDGE_DIST = 0.1      # table centre to the bed box's side, share of image width
+_BEDSIDE_MAX_AREA_SHARE = 0.15    # of the bed box
+_BEDSIDE_MARGIN = 0.02            # share of image height
+
+
+def relabel_bedside_tables(dets: list[dict]) -> None:
+    area = lambda b: (b[2] - b[0]) * (b[3] - b[1])
+    beds = [d["box"] for d in dets if d["label"] == "bed"]
+    for d in dets:
+        if d["label"] not in _BEDSIDE_LABELS:
+            continue
+        x1, y1, x2, y2 = d["box"]
+        cx = (x1 + x2) / 2
+        for bx1, by1, bx2, by2 in beds:
+            beside = min(abs(cx - bx1), abs(cx - bx2)) <= _BEDSIDE_MAX_EDGE_DIST
+            level = y1 >= by1 - _BEDSIDE_MARGIN and y2 <= by2 + _BEDSIDE_MARGIN
+            small = area(d["box"]) <= _BEDSIDE_MAX_AREA_SHARE * area((bx1, by1, bx2, by2))
+            if beside and level and small:
+                d["label"] = "nightstand"
+                break
 
 
 # A box this far inside a doorway, standing no lower than the doorway's sill
@@ -1069,6 +1097,10 @@ _PART_MASK_CONTAINMENT = 0.7
 # box, a "mirror" or "painting" is the headboard (art above the bed hangs
 # above the box).
 _ALWAYS_PART_LABELS = frozenset({"headboard", "mirror", "artwork", "painting"})
+# DINO reads an armchair's seat cushion as a "stool" or "ottoman".
+_SEAT_HOSTS = frozenset({"armchair", "chair", "dining chair", "office chair"})
+_SEAT_PART_LABELS = frozenset({"ottoman", "stool"})
+_SEAT_PART_CONTAINMENT = 0.9
 
 
 def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
@@ -1089,7 +1121,7 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
     def as_bool(mask):
         return None if mask is None else np.asarray(mask.convert("L")) > 127
 
-    hosts = [d for d in dets if d["label"] in _PILLOW_HOSTS and d.get("mask") is not None]
+    hosts = [d for d in dets if d["label"] in _PILLOW_HOSTS | _SEAT_HOSTS and d.get("mask") is not None]
     if not hosts:
         return dets
     host_masks = {id(h): as_bool(h["mask"]) for h in hosts}
@@ -1099,6 +1131,8 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
     for small in sorted(hosts, key=area):
         for big in hosts:
             if big is small or big["label"] != small["label"] or area(big) <= area(small):
+                continue
+            if big["label"] not in _PILLOW_HOSTS:
                 continue
             if _box_iou_and_containment(small["box"], big["box"])[1] >= _PART_BOX_CONTAINMENT:
                 host_masks[id(big)] = host_masks[id(big)] | host_masks[id(small)]
@@ -1115,6 +1149,14 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
                 host_area = (host["box"][2] - host["box"][0]) * (host["box"][3] - host["box"][1])
                 det_area = (det["box"][2] - det["box"][0]) * (det["box"][3] - det["box"][1])
                 if det_area >= host_area or box_in < _PART_BOX_CONTAINMENT:
+                    continue
+                if host["label"] in _SEAT_HOSTS:
+                    # A chair only takes back its own seat, read as a stool or
+                    # ottoman wholly inside the chair's box. A real footstool
+                    # stands in front and reaches outside it.
+                    if det["label"] in _SEAT_PART_LABELS and box_in >= _SEAT_PART_CONTAINMENT:
+                        host_of = host
+                        break
                     continue
                 if det["label"] in _PART_ONLY_LABELS and host["label"] != "bed":
                     continue  # a throw on a sofa is cut out, not folded in

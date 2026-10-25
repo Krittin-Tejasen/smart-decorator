@@ -165,6 +165,24 @@ class DedupeTests(unittest.TestCase):
         base["mask"] = img(_rect_mask(100, 100, 30, 80, 75, 90))
         self.assertEqual(seg.merge_parts_into_hosts([bed, base]), [bed])
 
+    def test_an_armchair_takes_back_its_seat_read_as_an_ottoman(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        chair = self.det("armchair", 0.38, (0.72, 0.65, 0.92, 0.97))
+        seat = self.det("ottoman", 0.36, (0.72, 0.76, 0.86, 0.87))
+        chair["mask"] = img(_rect_mask(100, 100, 72, 65, 92, 75))
+        seat["mask"] = img(_rect_mask(100, 100, 72, 76, 86, 87))
+        kept = seg.merge_parts_into_hosts([chair, seat])
+        self.assertEqual(kept, [chair])
+        self.assertTrue((np.asarray(chair["mask"]) > 127)[80, 80])
+
+    def test_a_footstool_in_front_of_the_armchair_stays(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        chair = self.det("armchair", 0.5, (0.5, 0.4, 0.8, 0.8))
+        stool = self.det("ottoman", 0.5, (0.55, 0.7, 0.75, 0.95))
+        chair["mask"] = img(_rect_mask(100, 100, 50, 40, 80, 80))
+        stool["mask"] = img(_rect_mask(100, 100, 55, 82, 75, 95))
+        self.assertEqual(len(seg.merge_parts_into_hosts([chair, stool])), 2)
+
     def test_a_real_bench_at_the_foot_of_the_bed_stays(self):
         img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
         bed = self.det("bed", 0.8, (0.1, 0.3, 0.8, 0.8))
@@ -418,6 +436,18 @@ class SamMaskTests(unittest.TestCase):
         four_poster = (0.33, 0.23, 0.68, 0.78)
         bed_box = (0.326, 0.236, 0.679, 0.779)
         self.assertEqual(seg.real_openings([doorway, glass_wall, four_poster], [bed_box]), [doorway])
+
+    def test_tables_beside_the_bed_are_nightstands(self):
+        bed = {"label": "bed", "box": (0.28, 0.50, 0.73, 0.82)}
+        left = {"label": "console table", "box": (0.277, 0.575, 0.373, 0.688)}
+        right = {"label": "desk", "box": (0.633, 0.576, 0.728, 0.689)}
+        bench = {"label": "side table", "box": (0.426, 0.684, 0.586, 0.93)}     # at the foot, below the bed
+        sideboard = {"label": "dresser", "box": (0.756, 0.564, 0.89, 0.726)}    # too big
+        far = {"label": "side table", "box": (0.031, 0.631, 0.15, 0.824)}       # by the chaise
+        dets = [bed, left, right, bench, sideboard, far]
+        seg.relabel_bedside_tables(dets)
+        self.assertEqual([d["label"] for d in dets],
+                         ["bed", "nightstand", "nightstand", "side table", "dresser", "side table"])
 
     def test_word_pieces_are_rejoined(self):
         self.assertEqual(seg.canonicalize_label("##board"), "headboard")
