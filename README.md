@@ -202,6 +202,41 @@ Unit tests for the clean-up logic (no models needed):
 python -m unittest discover -s tests -v
 ```
 
+## Product Matching
+
+`POST /match-products` (`backend/product_matching.py`) finds real IKEA products for one
+detected item. The app calls it when you open an item on the results screen.
+
+```
+item cut-out → CLIP (clip-ViT-B-32) → Pinecone `ikea-products`, filtered by furniture type
+  (+ price range) → card fields from Supabase `ikea_furniture` → one card per product
+  → drop matches below the MATCH_MIN_SCORE floor, label the rest high / medium / low
+  confidence → drop dead shop links
+```
+
+- The catalog (59,846 IKEA rows) was embedded once with `python -m scripts.ingest_products`.
+  Measurements behind the filter choices are in `pinecone-evaluate/pinecone-evaluation/EVALUATION_REPORT_EXPANDED_TH.md`.
+- `furniture_type` (sofa, bed, armchair, rug, ...) comes from `app/services/furniture_types.py`,
+  the one vocabulary shared by the catalog and segmentation labels. Fill it on the existing
+  vectors with `python -m scripts.add_furniture_type` (dry run by default; `--sample 20`,
+  then `--apply`). Until then queries fall back to image-only matching (`filter_level` in the
+  response says which filter answered).
+- Width only nudges the ranking; it is never a hard filter, because a 10% error in the
+  room/furniture size made a hard filter worse than no filter at all.
+
+Extra keys in `backend/.env`:
+
+```
+PINECONE_API_KEY=...
+SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_SECRET_KEY=...        # reads ikea_furniture
+MATCH_MIN_SCORE=0.50           # optional floor; matches below it are dropped
+MATCH_HIGH_SCORE=0.75          # optional; at or above = high confidence
+MATCH_MEDIUM_SCORE=0.65        # optional; at or above = medium, below = low
+```
+
+The first request loads the CLIP model (~30 s); later ones take about 3 s.
+
 ## Getting Started
 
 ### Prerequisites

@@ -19,6 +19,7 @@ class FurnitureMatchesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final matches = ref.watch(furnitureMatchesProvider(item));
+    final isSample = matches.valueOrNull?.any((m) => m.isSample) ?? false;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -42,9 +43,9 @@ class FurnitureMatchesScreen extends ConsumerWidget {
 
           const SizedBox(height: 22),
 
-          const Row(
+          Row(
             children: [
-              Expanded(
+              const Expanded(
                 child: Text(
                   'Matching products',
                   style: TextStyle(
@@ -54,13 +55,14 @@ class FurnitureMatchesScreen extends ConsumerWidget {
                   ),
                 ),
               ),
-              _SampleBadge(),
+              if (isSample) const _SampleBadge(),
             ],
           ),
 
-          const SizedBox(height: 10),
-
-          const _SampleNote(),
+          if (isSample) ...[
+            const SizedBox(height: 10),
+            const _SampleNote(),
+          ],
 
           const SizedBox(height: 14),
 
@@ -70,15 +72,7 @@ class FurnitureMatchesScreen extends ConsumerWidget {
               onRetry: () => ref.invalidate(furnitureMatchesProvider(item)),
             ),
             data: (products) => products.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 30),
-                    child: Center(
-                      child: Text(
-                        'No matching products found',
-                        style: TextStyle(color: AppColors.muted),
-                      ),
-                    ),
-                  )
+                ? const _NoMatches()
                 : Column(
                     children: [
                       for (final product in products) ...[
@@ -92,6 +86,33 @@ class FurnitureMatchesScreen extends ConsumerWidget {
       ),
 
       bottomNavigationBar: const AppFooterNav(current: FooterTab.none),
+    );
+  }
+}
+
+/// Nothing in the catalog was similar enough. Said plainly rather than
+/// showing weak guesses.
+class _NoMatches extends StatelessWidget {
+  const _NoMatches();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 30),
+      child: Column(
+        children: [
+          Text(
+            'No matching products found',
+            style: TextStyle(color: AppColors.muted),
+          ),
+          SizedBox(height: 4),
+          Text(
+            'Nothing in the catalog looks close enough to this item.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: AppColors.muted),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -213,8 +234,8 @@ class _SampleBadge extends StatelessWidget {
   }
 }
 
-/// Says plainly that this isn't real matching yet, so nobody reading the demo
-/// mistakes the products, prices or scores for real results.
+/// Shown only for placeholder results, so nobody reading a demo mistakes the
+/// products, prices or scores for real ones.
 class _SampleNote extends StatelessWidget {
   const _SampleNote();
 
@@ -233,8 +254,8 @@ class _SampleNote extends StatelessWidget {
           SizedBox(width: 8),
           Expanded(
             child: Text(
-              'These are sample results that preview the layout. '
-              'Real product matching is still in development.',
+              'These are sample results that preview the layout, '
+              'not real catalog products.',
               style: TextStyle(fontSize: 12, color: AppColors.muted, height: 1.35),
             ),
           ),

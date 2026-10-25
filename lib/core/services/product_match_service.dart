@@ -1,17 +1,70 @@
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
+
 import '../../shared/models/furniture_item.dart';
 import '../../shared/models/product_match.dart';
+import '../../shared/utils/data_url.dart';
+import 'api_service.dart';
 
 /// Finds catalogue products for a piece of furniture detected in a room.
-///
-/// Real matching (CLIP embedding -> Pinecone -> `ikea_furniture`) isn't merged
-/// yet, so the app uses [SampleProductMatchService]; when it exists, only
-/// [productMatchServiceProvider] has to change.
 abstract class ProductMatchService {
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item);
+  /// The best matches first. Empty when nothing in the catalog is close
+  /// enough (the backend drops matches below its similarity threshold) or
+  /// nothing fits [price].
+  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price});
 }
 
-/// Placeholder matches: plausible, clearly-marked (`isSample`) products so the
-/// advisor can see the intended result before the real matcher exists.
+/// Real matching: POST /match-products (backend/product_matching.py), which
+/// embeds the item's image with CLIP, searches the IKEA catalog in Pinecone
+/// restricted to the item's furniture type, and returns products with live
+/// shop links.
+class BackendProductMatchService implements ProductMatchService {
+  BackendProductMatchService({Dio? dio, this.count = 5}) : _dio = dio ?? ApiService().dio;
+
+  final Dio _dio;
+  final int count;
+
+  /// The image sent for matching: the cut-out when segmentation produced a
+  /// real mask (no room around the item, closest to IKEA's white-background
+  /// product photos), otherwise the box crop.
+  static Uint8List? imageFor(FurnitureItem item) {
+    if (item.maskPrecise && item.hasCutout) {
+      final cutout = decodeDataUrl(item.cutoutImage);
+      if (cutout != null) return cutout;
+    }
+    return decodeDataUrl(item.cropImage);
+  }
+
+  @override
+  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price}) async {
+    final image = imageFor(item);
+    if (image == null) {
+      throw StateError('This item has no image to match.');
+    }
+
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/match-products',
+      data: FormData.fromMap({
+        'label': item.label,
+        'top_k': '$count',
+        if (price?.min != null) 'min_price': '${price!.min}',
+        if (price?.max != null) 'max_price': '${price!.max}',
+        'image': MultipartFile.fromBytes(image, filename: 'item-${item.id}.png'),
+      }),
+    );
+
+    final matches = response.data?['matches'];
+    if (matches is! List) return const [];
+    return matches
+        .whereType<Map<String, dynamic>>()
+        .map(ProductMatch.fromJson)
+        .toList();
+  }
+}
+
+/// Placeholder matches: plausible, clearly-marked (`isSample`) products, for
+/// tests and for demoing the screens without the backend.
 ///
 /// Deterministic per detected item (same label + colours -> same products), so
 /// the page doesn't reshuffle when you come back to it. All numbers are made up.
@@ -21,7 +74,12 @@ class SampleProductMatchService implements ProductMatchService {
   final int count;
 
   @override
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item) async {
+  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price}) async {
+    final matches = _sampleMatches(item);
+    return price == null ? matches : matches.where((m) => price.contains(m.price)).toList();
+  }
+
+  List<ProductMatch> _sampleMatches(FurnitureItem item) {
     final label = titleCase(item.label);
     final profile = _profileFor(item.label);
     final seed = _fnv1a('${item.label}|${item.features.dominantColors.join(',')}');
