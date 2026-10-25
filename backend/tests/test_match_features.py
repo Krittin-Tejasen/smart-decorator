@@ -236,5 +236,60 @@ class RankingTests(unittest.TestCase):
         self.assertEqual(bare, {"color": None, "material": None})
 
 
+class EndpointFeatureTests(unittest.TestCase):
+    """/match-products: the new form fields reach the matcher, and a missing
+    package is a clear 503 instead of a bare 500."""
+
+    def setUp(self):
+        from io import BytesIO
+        from unittest.mock import patch
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from PIL import Image
+
+        app = FastAPI()
+        app.include_router(pm.router)
+        self.client = TestClient(app)
+        buf = BytesIO()
+        Image.new("RGB", (8, 8), (200, 30, 30)).save(buf, "PNG")
+        self.png = buf.getvalue()
+        self.patch = patch
+
+    def post(self, **data):
+        return self.client.post("/match-products", files={"image": ("item.png", self.png, "image/png")},
+                                data={"label": "armchair", **data})
+
+    def test_colours_and_materials_are_parsed_and_forwarded(self):
+        result = pm.MatchResult("armchair", "type", [], 0)
+        colors = json.dumps([{"catalog_color": "brown", "share": 3}, {"catalog_color": "beige", "share": 1}])
+        materials = json.dumps([{"name": "leather", "confidence": 0.8}])
+        with self.patch.object(pm, "find_candidates", return_value=result) as find:
+            resp = self.post(colors=colors, materials=materials)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        kwargs = find.call_args.kwargs
+        self.assertEqual(kwargs["item_colors"], (("brown", 0.75), ("beige", 0.25)))
+        self.assertEqual(kwargs["item_materials"], (("fabric", 0.8),))
+
+    def test_without_the_fields_nothing_is_forwarded(self):
+        result = pm.MatchResult("armchair", "type", [], 0)
+        with self.patch.object(pm, "find_candidates", return_value=result) as find:
+            self.post()
+        self.assertEqual(find.call_args.kwargs["item_colors"], ())
+        self.assertEqual(find.call_args.kwargs["item_materials"], ())
+
+    def test_malformed_fields_are_ignored_not_an_error(self):
+        result = pm.MatchResult("armchair", "type", [], 0)
+        with self.patch.object(pm, "find_candidates", return_value=result):
+            self.assertEqual(self.post(colors="not json", materials="{}").status_code, 200)
+
+    def test_a_missing_package_is_a_503_that_names_it(self):
+        error = ModuleNotFoundError("No module named 'sentence_transformers'", name="sentence_transformers")
+        with self.patch.object(pm, "find_candidates", side_effect=error):
+            resp = self.post()
+        self.assertEqual(resp.status_code, 503)
+        self.assertIn("sentence_transformers", resp.json()["detail"])
+        self.assertIn("pip install -r requirements.txt", resp.json()["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()

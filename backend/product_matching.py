@@ -381,6 +381,14 @@ async def match_products(
         )
     except RuntimeError as exc:  # missing PINECONE_API_KEY / SUPABASE_* on this machine
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ImportError as exc:  # sentence-transformers / pinecone not installed in this venv
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Product matching needs the Python package '{exc.name or exc}', which is not installed "
+                "on the server. Run: pip install -r requirements.txt"
+            ),
+        ) from exc
 
     return {
         "label": label,
