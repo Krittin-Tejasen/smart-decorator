@@ -22,3 +22,6 @@ torch
 torchvision
 transformers
 sam2
+# clip-ViT-B-32, also what product matching embeds with: second opinion on
+# DINO's labels (optional; segmentation runs without it).
+sentence-transformers

@@ -449,6 +449,25 @@ class SamMaskTests(unittest.TestCase):
         self.assertEqual([d["label"] for d in dets],
                          ["bed", "nightstand", "nightstand", "side table", "dresser", "side table"])
 
+    def test_clip_moves_a_lone_armchair_off_sofa_when_sure(self):
+        cands = seg.clip_candidates("sofa")
+        probs = [0.01 if c != "armchair" else 0.97 for c in cands]
+        self.assertEqual(seg.clip_verdict("sofa", cands, probs), "armchair")
+
+    def test_clip_does_not_shuffle_names_inside_a_product_type(self):
+        cands = seg.clip_candidates("console table")
+        probs = [0.9 if c == "desk" else 0.02 for c in cands]
+        self.assertEqual(seg.clip_verdict("console table", cands, probs), "console table")
+
+    def test_clip_needs_to_be_far_more_sure_than_of_dinos_label(self):
+        cands = seg.clip_candidates("chandelier")
+        probs = [0.62 if c == "decoration" else (0.2 if c == "chandelier" else 0.01) for c in cands]
+        self.assertEqual(seg.clip_verdict("chandelier", cands, probs), "chandelier")
+
+    def test_clip_leaves_labels_without_known_swaps_alone(self):
+        for label in ("nightstand", "bed", "rug", "desk", "artwork"):
+            self.assertIsNone(seg.clip_candidates(label))
+
     def test_word_pieces_are_rejoined(self):
         self.assertEqual(seg.canonicalize_label("##board"), "headboard")
         self.assertEqual(seg.canonicalize_label("head ##board"), "headboard")

@@ -79,6 +79,9 @@ Env vars
                             tended to add pillows, plants behind a lamp, and floor)
   SAM_MASK_SCORE_MARGIN     With SAM_MULTIMASK=1: how far below the best candidate's score a
                             larger mask may be and still be picked (default: 0.15)
+  SEGMENTATION_CLIP_RELABEL 0 = skip the CLIP second opinion on labels (default: 1; also
+                            skipped when sentence-transformers isn't installed)
+  CLIP_MODEL                sentence-transformers CLIP model for that (default: clip-ViT-B-32)
   SEGMENTATION_RESULTS_DIR  Folder to persist each result as JSON (default: segmentation_results)
   GEMINI_API_KEY            Already used by /generate-room
   GEMINI_VISION_MODEL       Gemini model for bbox detection fallback (default: gemini-3.6-flash)
@@ -708,6 +711,7 @@ _model_lock = threading.Lock()
 _inference_lock = threading.Lock()
 _grounding_dino_cache: tuple[Any, Any, str] | None = None
 _sam2_predictor_cache: tuple[Any, str] | None = None
+_clip_cache: Any = None
 
 
 def _get_device() -> str:
@@ -719,6 +723,23 @@ def _get_device() -> str:
         return "cuda" if torch.cuda.is_available() else "cpu"
     except ImportError:
         return "cpu"
+
+
+def _get_clip() -> Any:
+    """clip-ViT-B-32 (sentence-transformers), the model product matching uses;
+    None when sentence-transformers isn't installed or SEGMENTATION_CLIP_RELABEL=0."""
+    global _clip_cache
+    if os.getenv("SEGMENTATION_CLIP_RELABEL", "1") == "0":
+        return None
+    if _clip_cache is None:
+        with _model_lock:
+            if _clip_cache is None:
+                try:
+                    from sentence_transformers import SentenceTransformer
+                except ImportError:
+                    return None
+                _clip_cache = SentenceTransformer(os.getenv("CLIP_MODEL", "clip-ViT-B-32"), device=_get_device())
+    return _clip_cache
 
 
 def _get_grounding_dino() -> tuple[Any, Any, str]:
@@ -1173,6 +1194,95 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
     return kept
 
 
+# ── Second opinion on DINO's label from CLIP, across product types only ─────
+# Tried on 579 cut-outs from 56 rooms: let loose on the whole vocabulary,
+# zero-shot CLIP agreed with DINO on 39% and was often plainly wrong (artwork
+# and vases as table lamps). Inside one product type its changes were wrong as
+# often as right (desks as console tables) but matter little: matching maps
+# both to "table". So CLIP only gets to move a piece to another type, and only
+# along the mistakes DINO was seen making, when it is far more sure than of
+# DINO's label. 11 corrections and no new errors on those rooms; the swaps
+# allowed were chosen on the same rooms, so check new rooms with
+# compare_segmentation.py.
+_CLIP_TYPES = {
+    "sofa": ["sofa", "couch"],
+    "seat": ["armchair", "chair", "dining chair", "office chair", "stool", "bench", "ottoman"],
+    "table": ["coffee table", "side table", "console table", "dining table", "desk"],
+    "storage": ["sideboard", "tv stand", "dresser", "cabinet", "bookshelf", "wardrobe"],
+    "light": ["floor lamp", "table lamp", "pendant lamp", "chandelier"],
+    "decor": ["vase", "plant pot", "decoration"],
+}
+_CLIP_TYPE_OF = {label: t for t, labels in _CLIP_TYPES.items() for label in labels}
+_CLIP_SWAPS = {
+    "ottoman": ["coffee table", "side table"],   # a round coffee table
+    "stool": ["coffee table", "side table"],
+    "console table": ["sideboard", "tv stand"],  # a low cabinet
+    "chandelier": ["vase", "decoration"],        # branches in a vase, a wall clock
+    "pendant lamp": ["decoration"],
+    "sofa": ["armchair"],                        # a lone armchair
+    "couch": ["armchair"],
+}
+_CLIP_TEMPLATES = ("a photo of a {}.", "a {} on a white background.", "a product photo of a {}.")
+_CLIP_MIN_P = 0.6
+_CLIP_MIN_RATIO = 5.0
+
+
+def clip_candidates(label: str) -> list[str] | None:
+    """Labels CLIP may pick between for a DINO label: its own type plus the
+    cross-type swaps seen in practice. None = CLIP leaves it alone."""
+    if label not in _CLIP_SWAPS:
+        return None
+    return list(dict.fromkeys(_CLIP_TYPES[_CLIP_TYPE_OF[label]] + _CLIP_SWAPS[label]))
+
+
+def clip_verdict(label: str, candidates: list[str], probs) -> str:
+    """The label to keep: CLIP's pick only when it is another product type and
+    CLIP is sure of it (>= _CLIP_MIN_P, >= _CLIP_MIN_RATIO x DINO's label)."""
+    best = max(range(len(candidates)), key=lambda i: probs[i])
+    pick, p = candidates[best], float(probs[best])
+    if _CLIP_TYPE_OF.get(pick) == _CLIP_TYPE_OF.get(label):
+        return label
+    if p < _CLIP_MIN_P or float(probs[candidates.index(label)]) * _CLIP_MIN_RATIO > p:
+        return label
+    return pick
+
+
+def relabel_with_clip(img: Image.Image, detections: list[dict]) -> None:
+    """Run clip_verdict on each piece's cut-out, on white like product matching
+    sees it. Keeps DINO's label in "dino_label" when it changes."""
+    import numpy as np
+
+    model = _get_clip()
+    if model is None:
+        return
+    arr = np.array(img.convert("RGB"))
+    for d in detections:
+        cands = clip_candidates(d["label"])
+        if not cands or d.get("mask") is None:
+            continue
+        m = np.asarray(d["mask"].convert("L")) > 127
+        ys, xs = np.nonzero(m)
+        if len(xs) < 50:
+            continue
+        crop = np.where(m[..., None], arr, 255)[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+        side = int(max(crop.shape[:2]) * 1.1)
+        canvas = Image.new("RGB", (side, side), "white")
+        canvas.paste(Image.fromarray(crop.astype("uint8")), ((side - crop.shape[1]) // 2, (side - crop.shape[0]) // 2))
+        with _inference_lock:
+            v = model.encode(canvas, normalize_embeddings=True)
+            text = model.encode(
+                [t.format(c) for c in cands for t in _CLIP_TEMPLATES], normalize_embeddings=True
+            ).reshape(len(cands), len(_CLIP_TEMPLATES), -1).mean(1)
+        text /= np.linalg.norm(text, axis=1, keepdims=True)
+        logits = 100 * text @ v
+        probs = np.exp(logits - logits.max())
+        probs /= probs.sum()
+        new = clip_verdict(d["label"], cands, probs)
+        if new != d["label"]:
+            d["dino_label"] = d["label"]
+            d["label"] = new
+
+
 # A piece left with less than this share of its own mask after the overlap
 # split was a second box on something else (a lamp's shade reported as a
 # "pendant lamp"); as a card it would fall back to a bare rectangle.
@@ -1253,6 +1363,11 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
     # Largest first, so the big pieces (sofa, bed) lead a list of cards
     # instead of a stray vase.
     detections = [d for d in detections if not d.get("swallowed")]
+    if method == "grounding_dino_sam2":
+        try:
+            await asyncio.to_thread(relabel_with_clip, img, detections)
+        except Exception as exc:  # a second opinion must never fail the request
+            print(f"[segmentation] CLIP relabel skipped: {exc}")
     detections.sort(
         key=lambda d: (d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1]), reverse=True
     )

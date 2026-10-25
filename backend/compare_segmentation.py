@@ -145,8 +145,13 @@ def compare(path: Path) -> None:
     before = _before(img, boxes)
     all_dets = dets + mask_only
     seg._settle_masks(all_dets, W, H)
+    seg.relabel_with_clip(img, [d for d in dets if not d.get("swallowed")])
     after = [d["mask"] for d in dets]
-    labels = [d["label"] + (" (dropped)" if d.get("swallowed") else "") for d in dets]
+    labels = [
+        (f"{d['dino_label']} -> {d['label']}" if d.get("dino_label") else d["label"])
+        + (" (dropped)" if d.get("swallowed") else "")
+        for d in dets
+    ]
     dropped = [d["label"] for d in dets if d.get("swallowed")]
     if dropped:
         print(f"  dropped, mask taken by other items: {', '.join(dropped)}")
