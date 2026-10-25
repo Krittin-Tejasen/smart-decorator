@@ -318,5 +318,49 @@ class SegmentationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         spy.assert_not_called()
 
 
+class ErrorLoggingTests(unittest.IsolatedAsyncioTestCase):
+    """The Gemini API key is a ?key= query parameter and httpx quotes the whole
+    URL in its errors: it must never reach the logs."""
+
+    SECRET = "AQ.SECRET-KEY-123"
+
+    def http_error(self):
+        import httpx
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/m:generateContent?key={self.SECRET}"
+        request = httpx.Request("POST", url)
+        return httpx.HTTPStatusError(
+            f"Client error '402 Payment Required' for url '{url}'",
+            request=request, response=httpx.Response(402, request=request),
+        )
+
+    def test_safe_error_blanks_the_key_but_keeps_the_reason(self):
+        text = fx.safe_error(self.http_error())
+        self.assertNotIn(self.SECRET, text)
+        self.assertIn("key=REDACTED", text)
+        self.assertIn("402 Payment Required", text)
+        self.assertTrue(text.startswith("HTTPStatusError:"))
+
+    def test_safe_error_leaves_ordinary_errors_alone(self):
+        self.assertEqual(fx.safe_error(RuntimeError("quota")), "RuntimeError: quota")
+
+    async def test_a_failed_gemini_call_logs_without_the_key(self):
+        import contextlib
+        out = io.StringIO()
+        inputs = [fx.EnrichInput(id="0", label="sofa", image=solid((20, 20), (1, 2, 3)))]
+        with patch.dict(os.environ, {"FEATURE_PROVIDER": "gemini"}), contextlib.redirect_stdout(out):
+            result = await fx.enrich_features(inputs, post=AsyncMock(side_effect=self.http_error()))
+        self.assertEqual(result, {})
+        self.assertNotIn(self.SECRET, out.getvalue())
+        self.assertIn("402", out.getvalue())
+
+    async def test_segmentation_logs_without_the_key_too(self):
+        import contextlib
+        item = SegmentationIntegrationTests().build()
+        out = io.StringIO()
+        with patch.object(seg, "enrich_features", new=AsyncMock(side_effect=self.http_error())), contextlib.redirect_stdout(out):
+            await seg._enrich_items([item])
+        self.assertNotIn(self.SECRET, out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

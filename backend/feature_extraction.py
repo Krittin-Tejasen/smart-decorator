@@ -264,6 +264,16 @@ class EnrichInput(NamedTuple):
 
 PostFn = Callable[[dict], Awaitable[dict]]
 
+# The Gemini API key travels as a `?key=` query parameter, and httpx puts the full
+# URL in its error messages — so an error must never be printed as-is.
+_SECRET_QUERY = re.compile(r"([?&](?:key|api_key|apikey|token)=)[^&\s]+", re.IGNORECASE)
+
+
+def safe_error(exc: BaseException) -> str:
+    """`ExcType: message` for logs, with any API key in a URL blanked out."""
+    text = _SECRET_QUERY.sub(r"\1REDACTED", str(exc))
+    return f"{type(exc).__name__}: {text}"
+
 
 def feature_provider() -> str:
     return os.getenv("FEATURE_PROVIDER", "gemini").strip().lower()
@@ -391,7 +401,7 @@ async def enrich_features(
             response = await post(build_request(batch))
             return parse_enrichment(_response_json(response), {b.id for b in batch})
         except Exception as exc:  # network, quota, malformed JSON …
-            print(f"[features] Gemini enrichment failed for {len(batch)} item(s): {type(exc).__name__}: {exc}")
+            print(f"[features] Gemini enrichment failed for {len(batch)} item(s): {safe_error(exc)}")
             return {}
 
     batches = [inputs[i : i + _BATCH_SIZE] for i in range(0, len(inputs), _BATCH_SIZE)]

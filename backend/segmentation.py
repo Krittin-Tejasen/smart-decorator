@@ -104,6 +104,7 @@ from feature_extraction import (
     MaterialGuess,
     enrich_features,
     extract_swatches,
+    safe_error,
 )
 
 router = APIRouter(tags=["segmentation"])
@@ -761,7 +762,7 @@ async def _enrich_items(items: list[FurnitureItem]) -> None:
         ]
         enriched = await enrich_features(inputs)
     except Exception as exc:
-        print(f"[segmentation] feature enrichment skipped: {type(exc).__name__}: {exc}")
+        print(f"[segmentation] feature enrichment skipped: {safe_error(exc)}")
         return
     for item in items:
         if item.id in enriched:
