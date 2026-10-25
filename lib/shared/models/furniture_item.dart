@@ -148,12 +148,18 @@ class SegmentationResult {
   /// was). Non-null means the items only have rectangular boxes.
   final String? fallbackReason;
 
+  /// How furniture dimensions were computed: "lidar" (real depth map from the
+  /// scan session), "estimated" (monocular depth + floor plan), or null when
+  /// no spatial data was available.
+  final String? depthSource;
+
   SegmentationResult({
     required this.items,
     required this.counts,
     required this.total,
     required this.method,
     this.fallbackReason,
+    this.depthSource,
   });
 
   factory SegmentationResult.fromJson(Map<String, dynamic> json) {
@@ -174,6 +180,7 @@ class SegmentationResult {
       total: (json['total'] as num?)?.toInt() ?? 0,
       method: json['method'] as String? ?? 'none',
       fallbackReason: _nonEmpty(json['fallback_reason']),
+      depthSource: _nonEmpty(json['depth_source']),
     );
   }
 }

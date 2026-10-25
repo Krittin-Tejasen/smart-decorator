@@ -405,9 +405,11 @@ class _LidarViewState extends State<LidarView> {
             ),
           ),
 
-          TextButton(
+          TextButton.icon(
             onPressed: _isBusy ? null : _skipPhotoAndFinish,
-            child: const Text('Skip',
+            icon: const Icon(Icons.photo_library_rounded,
+                color: Colors.white60, size: 16),
+            label: const Text('Upload Photo',
                 style: TextStyle(color: Colors.white60, fontSize: 12)),
           ),
         ],

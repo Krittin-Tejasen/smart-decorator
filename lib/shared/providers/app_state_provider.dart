@@ -282,14 +282,23 @@ class AppStateNotifier
       return;
     }
 
-    // Spatial data for furniture-size estimation — only present when the
-    // uploaded photo came from a LiDAR scan session (see lidar_view.dart's
-    // photo step). Both arCaptureState.hasDepth and scanSpatialData must be
-    // present and from that same session; either missing just means no
-    // sizing data goes to the backend, same as today.
+    // Spatial data for furniture-size estimation.
+    //
+    // Full LiDAR path (hasSpatial): photo captured in the same AR session as
+    // the floor/ceiling taps, so extrinsics are aligned. The backend uses the
+    // real depth map + camera pose.
+    //
+    // Floor-plan-only path (hasFloorPlan): user completed the room scan but
+    // chose "Upload Photo" at step 3 instead of capturing in-app. The backend
+    // uses monocular depth estimation calibrated by the floor plan + height.
     final ar = state.arCaptureState;
-    final floorPlanPoints = state.scanSpatialData?['floorPlanPoints'] as List?;
-    final hasSpatial = ar != null && ar.hasDepth && floorPlanPoints != null;
+    final rawFloorPlan = state.scanSpatialData?['floorPlanPoints'] as List?;
+    final hasSpatial = ar != null && ar.hasDepth && rawFloorPlan != null;
+    final hasFloorPlan = !hasSpatial && rawFloorPlan != null;
+
+    final parsedFloorPlan = rawFloorPlan != null
+        ? rawFloorPlan.map((p) => Map<String, dynamic>.from(p as Map)).toList()
+        : null;
 
     final request = GenerateRoomRequest(
       roomType: state.selectedRoomType!.id,
@@ -302,8 +311,9 @@ class AppStateNotifier
       depthMapPng: hasSpatial ? ar.depthMapPng : null,
       depthMinMeters: hasSpatial ? ar.depthMinMeters : null,
       depthMaxMeters: hasSpatial ? ar.depthMaxMeters : null,
-      floorPlanPoints: hasSpatial
-          ? floorPlanPoints.map((p) => Map<String, dynamic>.from(p as Map)).toList()
+      floorPlanPoints: (hasSpatial || hasFloorPlan) ? parsedFloorPlan : null,
+      roomHeightMeters: hasFloorPlan
+          ? (state.scanSpatialData?['heightMeters'] as num?)?.toDouble()
           : null,
     );
 

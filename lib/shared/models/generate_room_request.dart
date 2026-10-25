@@ -26,6 +26,12 @@ class GenerateRoomRequest {
   /// boxes to the room's own axes rather than raw world axes.
   final List<Map<String, dynamic>>? floorPlanPoints;
 
+  /// Room height in metres from the LiDAR scan (ceiling Y minus floor Y).
+  /// Present when the user uploaded a photo after scanning but without
+  /// capturing in the same AR session — the backend uses it with monocular
+  /// depth estimation to calibrate furniture sizes.
+  final double? roomHeightMeters;
+
   GenerateRoomRequest({
     required this.roomType,
     required this.style,
@@ -38,10 +44,11 @@ class GenerateRoomRequest {
     this.depthMinMeters,
     this.depthMaxMeters,
     this.floorPlanPoints,
+    this.roomHeightMeters,
   });
 
   /// True when there's enough spatial data to ask the backend for furniture
-  /// dimensions alongside segmentation.
+  /// dimensions alongside segmentation (full LiDAR path).
   bool get hasSpatialData =>
       extrinsics != null &&
       intrinsics != null &&
@@ -49,6 +56,12 @@ class GenerateRoomRequest {
       depthMinMeters != null &&
       depthMaxMeters != null &&
       floorPlanPoints != null;
+
+  /// True when the user uploaded a photo after scanning but without capturing
+  /// in the same AR session. The backend uses monocular depth + the floor plan
+  /// and room height to estimate furniture sizes.
+  bool get hasFloorPlanData =>
+      !hasSpatialData && floorPlanPoints != null && roomHeightMeters != null;
 
   Map<String, dynamic> toJson() {
     return {
@@ -63,6 +76,7 @@ class GenerateRoomRequest {
       if (depthMinMeters != null) 'depth_min_m': depthMinMeters,
       if (depthMaxMeters != null) 'depth_max_m': depthMaxMeters,
       if (floorPlanPoints != null) 'floor_plan_points': floorPlanPoints,
+      if (roomHeightMeters != null) 'room_height_m': roomHeightMeters,
     };
   }
 }

@@ -47,6 +47,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
+  /// Shows a dialog requiring the user to scan the room first, with an option
+  /// to upload anyway (without furniture size estimation).
+  Future<bool> _confirmUploadWithoutScan(BuildContext context) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Scan Room First'),
+        content: const Text(
+          'Scanning the room with LiDAR lets us estimate real furniture sizes '
+          'from your photo.\n\nSkip the scan if you only want the redesign '
+          'without size measurements.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Scan Room'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Upload Anyway'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
   Future<void> _showPhotoSourceSheet(BuildContext context, WidgetRef ref) async {
     await showModalBottomSheet<void>(
       context: context,
@@ -124,9 +151,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.ink)),
               subtitle: const Text('Choose an existing photo',
                   style: TextStyle(fontSize: 12, color: AppColors.muted)),
-              onTap: () {
+              onTap: () async {
                 Navigator.pop(ctx);
-                pickImage(ref);
+                final appState = ref.read(appStateProvider);
+                if (appState.scanSpatialData == null) {
+                  if (!context.mounted) return;
+                  final proceed = await _confirmUploadWithoutScan(context);
+                  if (!proceed) {
+                    if (context.mounted) context.push('/scan');
+                    return;
+                  }
+                }
+                if (context.mounted) pickImage(ref);
               },
             ),
             const SizedBox(height: 8),

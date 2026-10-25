@@ -31,7 +31,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 
 from segmentation import FurnitureDimensions, run_segmentation
-from spatial_measurement import measure_furniture
+from spatial_measurement import measure_furniture, measure_furniture_monocular
 
 router = APIRouter(tags=["generation"])
 
@@ -659,6 +659,10 @@ async def generate_room(
     depth_min_m: float | None = Form(None),
     depth_max_m: float | None = Form(None),
     floor_plan_points: str | None = Form(None),
+    # Floor-plan-only path: user uploaded a photo after scanning, without an
+    # in-session AR capture. No depth map is provided; the backend runs
+    # monocular depth estimation instead.
+    room_height_m: float | None = Form(None),
 ):
     image_bytes = await image.read()
     mime_type = image.content_type or "image/png"
@@ -677,6 +681,7 @@ async def generate_room(
         depth_min_m=depth_min_m,
         depth_max_m=depth_max_m,
         floor_plan_points=floor_plan_points,
+        room_height_m=room_height_m,
     )
 
 
@@ -699,6 +704,7 @@ async def run_generate_room(
     depth_min_m: float | None = None,
     depth_max_m: float | None = None,
     floor_plan_points: str | None = None,
+    room_height_m: float | None = None,
     report: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """The whole generation pipeline: compose prompt -> generate -> critic
@@ -790,11 +796,8 @@ async def run_generate_room(
         gen_bytes = base64.b64decode(encoded)
         seg_result = await run_segmentation(gen_bytes, "image/png")
 
-        # Furniture-size estimation — only when the client sent full spatial
-        # data (a LiDAR scan session). Reuses the original scan's floor depth,
-        # valid only because the prompt above forces the camera framing to
-        # stay unchanged. See spatial_measurement.py for the full approach
-        # and its known limitations.
+        # ── Full LiDAR path ───────────────────────────────────────────────
+        # Client sent real depth map + camera pose from the AR session.
         has_spatial_data = (
             camera_intrinsics is not None
             and camera_extrinsics is not None
@@ -803,7 +806,21 @@ async def run_generate_room(
             and depth_max_m is not None
             and floor_plan_points is not None
         )
+
+        # ── Monocular-depth path ──────────────────────────────────────────
+        # User uploaded a photo after scanning; no in-session depth available.
+        # We run Depth Anything V2 Small on the source image and calibrate
+        # using the room's floor plan and height.
+        has_floor_plan_data = (
+            not has_spatial_data
+            and floor_plan_points is not None
+            and room_height_m is not None
+        )
+
+        depth_source: str | None = None
+
         if has_spatial_data:
+            depth_source = "lidar"
             try:
                 intrinsics = json.loads(camera_intrinsics)
                 extrinsics = json.loads(camera_extrinsics)
@@ -823,9 +840,35 @@ async def run_generate_room(
             except Exception as exc:
                 # Never let a sizing bug break the generation response —
                 # items just keep dimensions_m=None, same as today.
-                print(f"Furniture size estimation failed: {exc}")
+                print(f"Furniture size estimation (LiDAR) failed: {exc}")
 
-        response["furniture_segments"] = seg_result.model_dump()
+        elif has_floor_plan_data:
+            depth_source = "estimated"
+            try:
+                from depth_estimation import estimate_depth
+                progress("segment", "Estimating depth from photo", 0.95)
+                est_png_b64, est_min_m, est_max_m = await asyncio.get_event_loop().run_in_executor(
+                    None, estimate_depth, image_bytes
+                )
+                plan_points = json.loads(floor_plan_points)
+                for item in seg_result.items:
+                    dims = measure_furniture_monocular(
+                        mask_png_b64=item.mask_image.split(",", 1)[-1],
+                        depth_map_png_b64=est_png_b64,
+                        depth_min_m=est_min_m,
+                        depth_max_m=est_max_m,
+                        floor_plan_points=plan_points,
+                        room_height_m=room_height_m,
+                    )
+                    if dims is not None:
+                        item.dimensions_m = FurnitureDimensions(**dims)
+            except Exception as exc:
+                print(f"Furniture size estimation (monocular) failed: {exc}")
+
+        seg_dict = seg_result.model_dump()
+        if depth_source is not None:
+            seg_dict["depth_source"] = depth_source
+        response["furniture_segments"] = seg_dict
 
     # Nothing is stored here. A generation only becomes a saved room when the
     # user taps "Save Room Data" in the app, which uploads the images straight
@@ -921,6 +964,7 @@ async def start_generate_room_job(
     depth_min_m: float | None = Form(None),
     depth_max_m: float | None = Form(None),
     floor_plan_points: str | None = Form(None),
+    room_height_m: float | None = Form(None),
 ):
     image_bytes = await image.read()
     mime_type = image.content_type or "image/png"
@@ -948,6 +992,7 @@ async def start_generate_room_job(
             depth_min_m=depth_min_m,
             depth_max_m=depth_max_m,
             floor_plan_points=floor_plan_points,
+            room_height_m=room_height_m,
         )
     )
     _jobs[job.id] = job

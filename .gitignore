@@ -46,3 +46,6 @@ app.*.map.json
 
 # exclude .env file 
 .env
+
+# Claude Code local guidance
+CLAUDE.md
