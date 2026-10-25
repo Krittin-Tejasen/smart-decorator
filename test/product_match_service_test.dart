@@ -301,4 +301,20 @@ void main() {
       expect(titleCase('  '), 'Item');
     });
   });
+
+  group('confidence label', () {
+    ProductMatch at(double score, {String? confidence}) =>
+        ProductMatch(id: 'x', name: 'n', price: 1, category: 'c', score: score, confidence: confidence);
+
+    test('comes from the backend when it sends one', () {
+      expect(at(0.9, confidence: 'low').confidenceLabel, 'Weak match');
+      expect(ProductMatch.fromJson({'id': '1', 'score': 0.62, 'confidence': 'medium'}).confidenceLabel, 'Possible match');
+    });
+
+    test('is worked out from the score when it is missing', () {
+      expect(at(0.80).confidenceLabel, 'Strong match');
+      expect(at(0.68).confidenceLabel, 'Possible match');
+      expect(at(0.55).confidenceLabel, 'Weak match');
+    });
+  });
 }

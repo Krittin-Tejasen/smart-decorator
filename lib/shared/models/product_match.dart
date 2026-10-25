@@ -28,6 +28,11 @@ class ProductMatch {
   /// Visual similarity to the detected item, 0..1.
   final double score;
 
+  /// How sure the picture match is: "high", "medium" or "low". The backend
+  /// sends it; without it (sample data) it is worked out from [score] with the
+  /// same cut-offs.
+  final String confidence;
+
   /// True for placeholder data shown before real product matching exists. The
   /// UI must label it as such so nobody mistakes it for a real result.
   final bool isSample;
@@ -46,8 +51,9 @@ class ProductMatch {
     this.inStock = true,
     this.url,
     required this.score,
+    String? confidence,
     this.isSample = false,
-  });
+  }) : confidence = confidence ?? (score >= 0.75 ? 'high' : (score >= 0.65 ? 'medium' : 'low'));
 
   /// One entry of `matches` in the /match-products response.
   factory ProductMatch.fromJson(Map<String, dynamic> json) {
@@ -71,6 +77,7 @@ class ProductMatch {
       inStock: json['in_stock'] as bool? ?? false,
       url: text('url'),
       score: number('score') ?? 0,
+      confidence: text('confidence'),
     );
   }
 
@@ -83,6 +90,13 @@ class ProductMatch {
     ];
     return parts.isEmpty ? null : '${parts.join(' × ')} cm';
   }
+
+  /// "Strong match", "Possible match" or "Weak match".
+  String get confidenceLabel => switch (confidence) {
+        'high' => 'Strong match',
+        'medium' => 'Possible match',
+        _ => 'Weak match',
+      };
 
   /// "94% match".
   String get scoreLabel => '${(score * 100).round()}% match';

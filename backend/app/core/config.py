@@ -30,9 +30,14 @@ class Settings(BaseSettings):
     clip_model_name: str = "clip-ViT-B-32"
     embedding_dimension: int = 512
 
-    # Matches whose image similarity (cosine, 0..1) is below this are not shown.
+    # Image similarity (cosine, 0..1) is not comparable across furniture types:
+    # a right bed scores ~0.84, a right table lamp ~0.67. So a score is not used
+    # to hide matches of the right type; it only (a) drops obviously unrelated
+    # ones below the floor and (b) labels each shown match high / medium / low.
     # Provisional until it is calibrated on real generated rooms.
-    match_min_score: float = 0.75
+    match_min_score: float = 0.50
+    match_high_score: float = 0.75
+    match_medium_score: float = 0.65
 
 
 @lru_cache

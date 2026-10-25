@@ -169,10 +169,13 @@ class ProductMatchCard extends StatelessWidget {
                       foreground: AppColors.brassDeep,
                     ),
                     _Chip(
-                      label: product.inStock ? 'In stock' : 'Out of stock',
-                      background: AppColors.sageTint,
-                      foreground: AppColors.sageDeep,
+                      label: product.confidenceLabel,
+                      background: product.confidence == 'high' ? AppColors.sageTint : AppColors.sandTint,
+                      foreground: product.confidence == 'high' ? AppColors.sageDeep : AppColors.muted,
                     ),
+                    // No stock chip: the catalogue's in_stock flag is often wrong
+                    // (shows "out of stock" for products still on sale), so the
+                    // shop page is the place to check.
                     if (product.isSample)
                       const _Chip(
                         label: 'Sample',

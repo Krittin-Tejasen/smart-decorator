@@ -258,6 +258,20 @@ class FindCandidatesTests(unittest.TestCase):
         self.assertEqual(result.below_threshold, 1)
 
 
+class ConfidenceTests(unittest.TestCase):
+    def test_bands(self):
+        self.assertEqual([pm.confidence_of(x) for x in (0.84, 0.75, 0.70, 0.65, 0.60)], ["high", "high", "medium", "medium", "low"])
+
+    def test_a_right_but_low_scoring_match_is_shown_with_a_low_label(self):
+        # A correct table lamp scores ~0.67 and a correct bed ~0.84: one cut-off
+        # cannot serve both, so the match is shown and labelled, not hidden.
+        card = pm.to_product_match(pm.Candidate(row=row("a", "FLOTTILJ desk lamp"), score=0.62), True)
+        self.assertEqual(card["confidence"], "low")
+
+    def test_the_floor_still_drops_unrelated_products(self):
+        self.assertLess(pm.settings.match_min_score, pm.settings.match_medium_score)
+
+
 class LinkCheckTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         pm._link_cache.clear()

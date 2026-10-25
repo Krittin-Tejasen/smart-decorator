@@ -158,6 +158,17 @@ def _country_rank(row: dict[str, Any]) -> int:
     return _PREFERRED_COUNTRIES.index(country) if country in _PREFERRED_COUNTRIES else len(_PREFERRED_COUNTRIES)
 
 
+def confidence_of(score: float) -> str:
+    """How sure the picture match is: "high", "medium" or "low". Shown to the
+    user instead of hiding the match, because scores of different furniture
+    types are not on one scale."""
+    if score >= settings.match_high_score:
+        return "high"
+    if score >= settings.match_medium_score:
+        return "medium"
+    return "low"
+
+
 def to_product_match(candidate: Candidate, link_ok: bool | None) -> dict[str, Any]:
     """The JSON the app reads into its ProductMatch model."""
     row = candidate.row
@@ -176,6 +187,7 @@ def to_product_match(candidate: Candidate, link_ok: bool | None) -> dict[str, An
         "url": row.get("url") or None,
         "country_code": row.get("country_code") or None,
         "score": round(candidate.score, 4),
+        "confidence": confidence_of(candidate.score),
         "link_ok": link_ok,
     }
 
