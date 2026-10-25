@@ -352,7 +352,7 @@ class SamMaskTests(unittest.TestCase):
         self.assertFalse(nightstand["mask"][40, 35])
         self.assertTrue(lamp["mask"][40, 35])
 
-    def test_pillows_leave_the_bed_they_sit_on(self):
+    def test_a_small_unlabelled_box_in_front_takes_its_pixels(self):
         bed = {"box": (0.1, 0.4, 0.9, 0.9), "mask": _rect_mask(100, 100, 10, 40, 90, 90)}
         pillow = {"box": (0.2, 0.45, 0.4, 0.55), "mask": _rect_mask(100, 100, 20, 45, 40, 55)}
         seg.resolve_overlaps([bed, pillow])
@@ -488,14 +488,27 @@ class SamMaskTests(unittest.TestCase):
         self.assertEqual(mask_only, [])
         self.assertTrue((np.asarray(furniture[0]["mask"]) > 127)[70, 80])
 
-    def test_a_blanket_on_the_sofa_is_cut_out(self):
+    def test_a_bench_at_the_foot_keeps_its_pixels_from_the_bed(self):
+        bed = {"label": "bed", "box": (0.30, 0.49, 0.71, 0.80), "mask": _rect_mask(100, 100, 30, 49, 71, 85)}
+        bench = {"label": "bench", "box": (0.33, 0.67, 0.67, 0.85), "mask": _rect_mask(100, 100, 33, 67, 67, 85)}
+        seg.resolve_overlaps([bed, bench])
+        self.assertFalse(bed["mask"][80, 50])
+        self.assertTrue(bench["mask"][80, 50])
+
+    def test_pillows_and_throws_join_the_sofa(self):
         img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
-        sofa = {"label": "sofa", "confidence": 0.7, "box": (0.1, 0.4, 0.9, 0.8), "mask": img(_rect_mask(100, 100, 10, 40, 90, 80))}
+        sofa = {"label": "sofa", "confidence": 0.7, "box": (0.1, 0.4, 0.9, 0.8), "mask": img(_rect_mask(100, 100, 10, 50, 90, 80))}
         throw = {"label": "blanket", "confidence": 0.4, "box": (0.6, 0.45, 0.75, 0.7), "mask": img(_rect_mask(100, 100, 60, 45, 75, 70))}
-        furniture, mask_only = seg.select_detections([sofa, throw], [sofa["mask"], throw["mask"]], 100, 100)
+        pillow = {"label": "pillow", "confidence": 0.5, "box": (0.2, 0.42, 0.35, 0.55), "mask": img(_rect_mask(100, 100, 20, 42, 35, 55))}
+        stray = {"label": "pillow", "confidence": 0.4, "box": (0.0, 0.9, 0.05, 0.98), "mask": img(_rect_mask(100, 100, 0, 90, 5, 98))}
+        dets = [sofa, throw, pillow, stray]
+        furniture, mask_only = seg.select_detections(dets, [d["mask"] for d in dets], 100, 100)
         self.assertEqual([d["label"] for d in furniture], ["sofa"])
-        seg._settle_masks(furniture + mask_only, 100, 100)
-        self.assertFalse((np.asarray(furniture[0]["mask"]) > 127)[55, 65])
+        self.assertEqual(mask_only, [])
+        seg._settle_masks(furniture, 100, 100)
+        merged = np.asarray(furniture[0]["mask"]) > 127
+        self.assertTrue(merged[46, 65] and merged[44, 25])
+        self.assertFalse(merged[94, 2])
 
     def test_pillows_are_mask_only(self):
         self.assertTrue(seg.is_mask_only_label("cushion"))

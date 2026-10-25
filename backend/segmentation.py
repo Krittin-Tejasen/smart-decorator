@@ -119,10 +119,10 @@ _FURNITURE_PROMPT = (
     "floor lamp . table lamp . pendant lamp . chandelier . "
     "rug . carpet . curtain . blinds . "
     "plant pot . artwork . painting . mirror . vase . decoration . "
-    # Mask-only: found so their pixels can be cut out of the sofa or bed they
-    # sit on, then dropped. A product match should see the sofa, not its pillows.
+    # Soft furnishings: folded into the sofa, bed or chair they lie on, never a
+    # card. Named so DINO doesn't call them a stool or a sofa of their own.
     "pillow . cushion . throw pillow . "
-    # Named so DINO doesn't call the duvet a "cushion"; folded into the bed.
+    # Named so DINO doesn't call the duvet a "cushion".
     "blanket . "
     # Decoys, not furniture: without them Grounding DINO forces a door onto the
     # nearest furniture word ("mirror") and a window onto "curtain". Giving it
@@ -143,16 +143,12 @@ _NON_FURNITURE_LABELS = frozenset({"doorway", "door", "window", "ceiling light",
 # Openings something outside the room can be seen through.
 _OPENING_LABELS = frozenset({"doorway", "door"})
 
-# Segmented only to take their pixels away from what they sit on; never a card.
+# Never a card of their own: they join the mask of the sofa, bed or chair they
+# lie on (merge_parts_into_hosts), or are dropped.
 _MASK_ONLY_LABELS = frozenset({"pillow", "cushion", "throw pillow"})
-# Never a card of its own: a blanket on a bed joins the bed's mask; one on a
-# sofa is cut out of it like a pillow.
 _PART_ONLY_LABELS = frozenset({"blanket"})
 # What pillows are cut out of. Not chairs: DINO calls a seat "cushion" too.
 _PILLOW_HOSTS = frozenset({"sofa", "couch", "bed"})
-# A "pillow" box bigger than this share of the bed or sofa box is something
-# else (a fold of the duvet); cutting it out would take part of the piece.
-_MAX_PILLOW_HOST_SHARE = 0.15
 
 # Labels of the same "family" are treated as the same physical object when
 # their boxes overlap heavily (Grounding DINO often reports one chair twice as
@@ -671,7 +667,7 @@ def resolve_overlaps(dets: list[dict]) -> None:
     any, so each cut-out holds one piece for product matching. A rug is always
     behind: it gives shared pixels to anything and takes none. Otherwise a box
     well under the other's size is in front (the lamp on the nightstand, the
-    vase at the foot of a floor lamp, pillows on a sofa) and the larger one
+    vase at the foot of a floor lamp) and the larger one
     gives those pixels up. Similar-sized boxes keep their own masks.
     """
     for a in dets:
@@ -682,14 +678,13 @@ def resolve_overlaps(dets: list[dict]) -> None:
             b_floor = b.get("label") in _FLOOR_LABELS
             if b_floor:
                 continue  # a rug never takes pixels
+            if b.get("label") in _MASK_ONLY_LABELS | _PART_ONLY_LABELS:
+                continue  # a pillow or throw is part of what it lies on
             area_a = (a["box"][2] - a["box"][0]) * (a["box"][3] - a["box"][1])
             area_b = (b["box"][2] - b["box"][0]) * (b["box"][3] - b["box"][1])
-            if b.get("label") in _MASK_ONLY_LABELS | _PART_ONLY_LABELS:
-                if a.get("label") not in _PILLOW_HOSTS:
-                    continue  # a chair's seat cushion is part of the chair
-                if area_b > area_a * _MAX_PILLOW_HOST_SHARE:
-                    continue  # too big to be a pillow on it
-            if not a_floor:
+            # A bed's mask (the union of SAM 2's candidates) reaches over what
+            # stands at its foot and sides; any smaller piece keeps its pixels.
+            if not a_floor and a.get("label") not in _UNION_LABELS:
                 if area_b >= area_a * _MAX_FRONT_AREA_RATIO:
                     continue  # not clearly in front
             a["mask"] = a["mask"] & ~b["mask"]
@@ -862,6 +857,20 @@ def _post_process_threshold_kwargs(processor: Any, box_threshold: float, text_th
 
 # ── Stage 2: SAM 2 (image + boxes → one mask per box), run locally ─────────
 
+# For a bed box SAM 2's single mask is the duvet and frame, without the
+# headboard; its three candidates split the bed into headboard / body / whole
+# (speckled). Together they are the whole bed. Tried on 18 bedrooms.
+_UNION_LABELS = frozenset({"bed"})
+
+
+def union_of_candidates(predictor: Any, box: list[float]):
+    """Union of SAM 2's three candidate masks for a box (set_image already done)."""
+    import numpy as np
+
+    masks, _scores, _logits = predictor.predict(box=np.array(box), multimask_output=True)
+    return np.logical_or.reduce(masks > 0)
+
+
 def _segment_boxes_with_sam2_local(
     img: Image.Image, boxes_px: list[list[float]], labels: list[str] | None = None
 ) -> list[Image.Image | None]:
@@ -896,7 +905,10 @@ def _segment_boxes_with_sam2_local(
                 )
                 masks = masks > 0
                 best = select_best_mask(masks, scores, padded, margin) if multimask else 0
-                mask_arr = clean_mask(masks[best], padded, fill_holes=False).astype("uint8") * 255
+                mask = masks[best]
+                if label in _UNION_LABELS:
+                    mask = mask | union_of_candidates(predictor, padded)
+                mask_arr = clean_mask(mask, padded, fill_holes=False).astype("uint8") * 255
                 masks_out.append(Image.fromarray(mask_arr, mode="L"))
             except Exception as exc:
                 print(f"[segmentation] SAM 2 failed on box {box}: {exc}")
@@ -992,11 +1004,11 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
 
     Normalises boxes, drops non-furniture and implausibly small pieces, and
     merges the same object reported twice (chair as "armchair" + "office
-    chair"). Pillows come back separately: they skip dedupe — a cushion box
-    must never knock out its sofa — and only exist to be cut out of the sofa
-    or bed in _settle_masks. Blankets skip dedupe too: SAM 2 paints a duvet
-    box as nearly the whole bed, and the "duplicate" swallowed the bed.
-    Anything seen through an open doorway is outside the room and dropped.
+    chair"). Pillows, cushions and blankets skip dedupe — a cushion box must
+    never knock out its sofa, and SAM 2 paints a duvet box as nearly the whole
+    bed — then join the piece they lie on. The second list is kept for
+    callers and is always empty now. Anything seen through an open doorway
+    is outside the room and dropped.
     """
     detections: list[dict] = []
     openings: list[tuple] = []
@@ -1036,17 +1048,13 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
 
     openings = real_openings(openings, [d["box"] for d in detections])
     detections = [d for d in detections if not seen_through_opening(d["box"], openings)]
-    mask_only = [d for d in detections if is_mask_only_label(d["label"])]
-    parts = [d for d in detections if d["label"] in _PART_ONLY_LABELS]
-    furniture = dedupe_detections(
-        [d for d in detections if not is_mask_only_label(d["label"]) and d["label"] not in _PART_ONLY_LABELS]
-    )
-    furniture = merge_parts_into_hosts(furniture + parts)
-    # A blanket that didn't join a bed is cut out of whatever it lies on.
-    mask_only += [d for d in furniture if d["label"] in _PART_ONLY_LABELS]
-    furniture = [d for d in furniture if d["label"] not in _PART_ONLY_LABELS]
+    soft = [d for d in detections if d["label"] in _SOFT_FURNISHING_LABELS]
+    furniture = dedupe_detections([d for d in detections if d["label"] not in _SOFT_FURNISHING_LABELS])
+    furniture = merge_parts_into_hosts(furniture + soft)
+    # A pillow or throw that lies on nothing found is dropped, never a card.
+    furniture = [d for d in furniture if d["label"] not in _SOFT_FURNISHING_LABELS]
     relabel_bedside_tables(furniture)
-    return furniture, mask_only
+    return furniture, []
 
 
 # DINO calls a nightstand "console table", "desk", "side table" or "stool" in
@@ -1122,6 +1130,7 @@ _ALWAYS_PART_LABELS = frozenset({"headboard", "mirror", "artwork", "painting"})
 _SEAT_HOSTS = frozenset({"armchair", "chair", "dining chair", "office chair"})
 _SEAT_PART_LABELS = frozenset({"ottoman", "stool"})
 _SEAT_PART_CONTAINMENT = 0.9
+_SOFT_FURNISHING_LABELS = _MASK_ONLY_LABELS | _PART_ONLY_LABELS
 
 
 def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
@@ -1165,12 +1174,17 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
         host_of = None
         mask = as_bool(det.get("mask"))
         if det not in hosts and mask is not None and mask.any():
-            for host in hosts:
+            for host in sorted(hosts, key=area):  # the tightest host first
                 _iou, box_in = _box_iou_and_containment(det["box"], host["box"])
                 host_area = (host["box"][2] - host["box"][0]) * (host["box"][3] - host["box"][1])
                 det_area = (det["box"][2] - det["box"][0]) * (det["box"][3] - det["box"][1])
                 if det_area >= host_area or box_in < _PART_BOX_CONTAINMENT:
                     continue
+                if det["label"] in _SOFT_FURNISHING_LABELS:
+                    # Pillows, seat cushions and throws belong to what they lie
+                    # on: catalogue photos of sofas and beds have them too.
+                    host_of = host
+                    break
                 if host["label"] in _SEAT_HOSTS:
                     # A chair only takes back its own seat, read as a stool or
                     # ottoman wholly inside the chair's box. A real footstool
@@ -1179,10 +1193,8 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
                         host_of = host
                         break
                     continue
-                if det["label"] in _PART_ONLY_LABELS and host["label"] != "bed":
-                    continue  # a throw on a sofa is cut out, not folded in
                 in_host_mask = (mask & host_masks[id(host)]).sum() / mask.sum()
-                if det["label"] in _ALWAYS_PART_LABELS | _PART_ONLY_LABELS or in_host_mask >= _PART_MASK_CONTAINMENT:
+                if det["label"] in _ALWAYS_PART_LABELS or in_host_mask >= _PART_MASK_CONTAINMENT:
                     host_of = host
                     break
         if host_of is None:
