@@ -48,6 +48,74 @@ void main() {
     });
   });
 
+  group('FurnitureFeatures.fromJson', () {
+    Map<String, dynamic> withFeatures(Map<String, dynamic> extra) {
+      final json = itemJson();
+      json['features'] = <String, dynamic>{
+        ...(json['features'] as Map<String, dynamic>),
+        ...extra,
+      };
+      return json;
+    }
+
+    test('reads measured colours, materials, finish, colour name and meta', () {
+      final f = FurnitureItem.fromJson(withFeatures({
+        'colors': [
+          {'hex': '#6d422c', 'catalog_color': 'brown', 'share': 0.7, 'lab': [35.0, 15.0, 20.0]},
+          {'hex': '#c3a687', 'catalog_color': 'beige', 'share': 0.3, 'lab': [70.0, 8.0, 20.0]},
+        ],
+        'materials': [
+          {'name': 'ceramic', 'confidence': 0.95},
+          {'name': 'wood', 'confidence': 0.2},
+        ],
+        'finish': 'matte, unglazed',
+        'color_name': 'terracotta',
+        'meta': {'source': 'gemini', 'usable': false},
+      })).features;
+
+      expect(f.colors.map((c) => c.catalogColor), ['brown', 'beige']);
+      expect(f.colors.first.share, 0.7);
+      expect(f.colors.first.hex, '#6d422c');
+      expect(f.materials.map((m) => m.name), ['ceramic', 'wood']);
+      expect(f.materials.first.confidence, 0.95);
+      expect(f.hasMaterial, isTrue);
+      expect(f.finish, 'matte, unglazed');
+      expect(f.colorName, 'terracotta');
+      expect(f.source, 'gemini');
+      expect(f.usable, isFalse);
+    });
+
+    test('an older backend without the new fields still parses, with safe defaults', () {
+      final f = FurnitureItem.fromJson(itemJson()).features;
+
+      expect(f.colors, isEmpty);
+      expect(f.materials, isEmpty);
+      expect(f.hasMaterial, isFalse);
+      expect(f.finish, isNull);
+      expect(f.colorName, isNull);
+      expect(f.source, 'pixels_only');
+      expect(f.usable, isTrue);
+    });
+
+    test('malformed new fields are ignored rather than crashing the whole result', () {
+      final f = FurnitureItem.fromJson(withFeatures({
+        'colors': 'brown',
+        'materials': [5, {'name': '', 'confidence': 1}, {'name': 'wood', 'confidence': 'x'}],
+        'finish': '',
+        'color_name': 7,
+        'meta': 'gemini',
+      })).features;
+
+      expect(f.colors, isEmpty);
+      expect(f.materials.map((m) => m.name), ['wood']);
+      expect(f.materials.single.confidence, 0);
+      expect(f.finish, isNull);
+      expect(f.colorName, isNull);
+      expect(f.source, 'pixels_only');
+      expect(f.usable, isTrue);
+    });
+  });
+
   group('SegmentationResult.fromJson', () {
     Map<String, dynamic> resultJson({Object? reason = 'omit'}) => {
           'items': [itemJson()],

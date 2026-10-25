@@ -96,6 +96,17 @@ class FurnitureMatchesScreen extends ConsumerWidget {
   }
 }
 
+/// One short line about an item's material and colour, e.g. "Wood, Fabric ·
+/// terracotta". Null when there is nothing to say.
+String? describeTraits(FurnitureFeatures features) {
+  final materials = features.materials.map((m) => titleCase(m.name)).join(', ');
+  final parts = [
+    if (materials.isNotEmpty) materials,
+    if (features.colorName != null) features.colorName!,
+  ];
+  return parts.isEmpty ? null : parts.join(' · ');
+}
+
 /// The detected item itself: its cut-out and the colours found in it.
 class _DetectedHeader extends StatelessWidget {
   final FurnitureItem item;
@@ -108,6 +119,10 @@ class _DetectedHeader extends StatelessWidget {
     final value = int.tryParse(digits, radix: 16);
     return value == null ? null : Color(0xFF000000 | value);
   }
+
+  /// "Wood, Fabric · terracotta", from what the backend extracted (null when
+  /// it extracted neither a material nor a colour name).
+  String? get _traits => describeTraits(item.features);
 
   @override
   Widget build(BuildContext context) {
@@ -160,6 +175,17 @@ class _DetectedHeader extends StatelessWidget {
                   'Detected in your design',
                   style: TextStyle(fontSize: 12, color: AppColors.muted),
                 ),
+
+                if (_traits != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    _traits!,
+                    key: const ValueKey('detected-traits'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: AppColors.ink),
+                  ),
+                ],
 
                 if (swatches.isNotEmpty) ...[
                   const SizedBox(height: 10),

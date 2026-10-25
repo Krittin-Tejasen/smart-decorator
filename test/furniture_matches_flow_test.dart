@@ -23,6 +23,7 @@ FurnitureItem furniture(
   bool cutout = true,
   bool crop = true,
   List<String> colors = const ['#725f4e', '#98826e'],
+  FurnitureFeatures? features,
 }) {
   return FurnitureItem(
     id: id,
@@ -33,7 +34,7 @@ FurnitureItem furniture(
     cutoutImage: cutout ? kSampleCutoutDataUrl : null,
     maskImage: '',
     maskPrecise: cutout,
-    features: FurnitureFeatures(dominantColors: colors, areaPct: 5, aspectRatio: 1),
+    features: features ?? FurnitureFeatures(dominantColors: colors, areaPct: 5, aspectRatio: 1),
   );
 }
 
@@ -186,6 +187,44 @@ void main() {
     });
   });
 
+  group('extracted material and colour', () {
+    testWidgets('the header shows the item\'s materials and colour name', (tester) async {
+      usePhone(tester);
+      final features = FurnitureFeatures(
+        dominantColors: const ['#6d422c'],
+        areaPct: 5,
+        aspectRatio: 1,
+        materials: [
+          MaterialGuess(name: 'ceramic', confidence: 0.95),
+          MaterialGuess(name: 'wood', confidence: 0.3),
+        ],
+        colorName: 'terracotta',
+        source: 'gemini',
+      );
+      await tester.pumpWidget(appWith([furniture('vase', features: features)]));
+      await settle(tester);
+
+      await tapCard(tester, 'Vase');
+
+      expect(find.byKey(const ValueKey('detected-traits')), findsOneWidget);
+      expect(find.text('Ceramic, Wood · terracotta'), findsOneWidget);
+    });
+
+    test('describeTraits copes with a colour name only, a material only, or nothing', () {
+      FurnitureFeatures with_({List<MaterialGuess> m = const [], String? name}) => FurnitureFeatures(
+            dominantColors: const [],
+            areaPct: 1,
+            aspectRatio: 1,
+            materials: m,
+            colorName: name,
+          );
+
+      expect(describeTraits(with_(name: 'beige')), 'beige');
+      expect(describeTraits(with_(m: [MaterialGuess(name: 'leather', confidence: 1)])), 'Leather');
+      expect(describeTraits(with_()), isNull);
+    });
+  });
+
   group('tapping a card opens that item\'s matching products', () {
     testWidgets('shows the item, a clear sample-data notice and three numbered products', (tester) async {
       usePhone(tester);
@@ -201,6 +240,9 @@ void main() {
           reason: 'app bar title + header');
       expect(find.text('Detected in your design'), findsOneWidget);
       expect(find.descendant(of: page, matching: find.byKey(const ValueKey('furniture-crop'))), findsOneWidget);
+
+      // nothing extracted -> no material/colour line is invented
+      expect(find.byKey(const ValueKey('detected-traits')), findsNothing);
 
       // it is obvious this is not real matching
       expect(find.text('Matching products'), findsOneWidget);
