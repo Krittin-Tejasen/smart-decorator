@@ -633,105 +633,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
                 const SizedBox(height: 26),
 
-                ///////////////  Upload Room Photo Section
-                const _SectionLabel('Upload Current Room Photo'),
+                ///////////////  Step 1 — LiDAR Scan Card
+                _StepLabel(
+                  step: 1,
+                  title: 'Scan Your Room',
+                  done: appState.scanCompleted,
+                ),
 
                 const SizedBox(height: 12),
 
-                if (appState.uploadedImage == null)
-                  ///////////////  Upload / AR Camera Button
-                  GestureDetector(
-                    onTap: () => _showPhotoSourceSheet(context, ref),
-
-                    child: Container(
-                      width: double.infinity,
-
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 18,
-                      ),
-
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: AppColors.muted.withValues(alpha: 0.35),
-                          width: 1.4,
-                          style: BorderStyle.solid,
-                        ),
-                      ),
-
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(
-                              color: AppColors.sageTint,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(
-                              Icons.add_a_photo_rounded,
-                              size: 18,
-                              color: AppColors.sageDeep,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          const Expanded(
-                            child: Text(
-                              'Take a photo or Upload photo',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.ink,
-                              ),
-                            ),
-                          ),
-                          const Icon(Icons.chevron_right_rounded,
-                              color: AppColors.muted, size: 20),
-                        ],
-                      ),
-                    ),
-                  )
-                else
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
-                    child: Stack(
-                      children: [
-                        Image.file(
-                          appState.uploadedImage!,
-                          height: 150,
-                          width: double.infinity,
-                          fit: BoxFit.cover,
-                        ),
-                        Positioned(
-                          top: 10,
-                          right: 10,
-                          child: Material(
-                            color: AppColors.ink.withValues(alpha: 0.55),
-                            shape: const CircleBorder(),
-                            child: IconButton(
-                              tooltip: 'Remove photo',
-                              iconSize: 18,
-                              icon: const Icon(
-                                Icons.close_rounded,
-                                color: Colors.white,
-                              ),
-                              onPressed: () {
-                                ref
-                                    .read(appStateProvider.notifier)
-                                    .clearUploadedImage();
-                              },
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                const SizedBox(height: 18),
-
-                ///////////////  LiDAR Scan Button Card
                 Builder(builder: (context) {
                   final scanDone = appState.scanCompleted;
                   return Stack(
@@ -864,6 +774,111 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   );
                 }),
 
+                const SizedBox(height: 18),
+
+                ///////////////  Step 2 — Add Room Photo
+                _StepLabel(
+                  step: 2,
+                  title: 'Add Room Photo',
+                  done: appState.uploadedImage != null,
+                  locked: !appState.scanCompleted,
+                ),
+
+                const SizedBox(height: 12),
+
+                if (appState.uploadedImage == null)
+                  ///////////////  Upload / AR Camera Button
+                  Opacity(
+                    opacity: appState.scanCompleted ? 1.0 : 0.45,
+                    child: GestureDetector(
+                      onTap: () => _showPhotoSourceSheet(context, ref),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 18,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: AppColors.muted.withValues(alpha: 0.35),
+                            width: 1.4,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: AppColors.sageTint,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(
+                                appState.scanCompleted
+                                    ? Icons.add_a_photo_rounded
+                                    : Icons.lock_outline_rounded,
+                                size: 18,
+                                color: AppColors.sageDeep,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                appState.scanCompleted
+                                    ? 'Take a photo or Upload photo'
+                                    : 'Complete Step 1 first',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.ink,
+                                ),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right_rounded,
+                                color: AppColors.muted, size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: Stack(
+                      children: [
+                        Image.file(
+                          appState.uploadedImage!,
+                          height: 150,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                        ),
+                        Positioned(
+                          top: 10,
+                          right: 10,
+                          child: Material(
+                            color: AppColors.ink.withValues(alpha: 0.55),
+                            shape: const CircleBorder(),
+                            child: IconButton(
+                              tooltip: 'Remove photo',
+                              iconSize: 18,
+                              icon: const Icon(
+                                Icons.close_rounded,
+                                color: Colors.white,
+                              ),
+                              onPressed: () {
+                                ref
+                                    .read(appStateProvider.notifier)
+                                    .clearUploadedImage();
+                              },
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
                 const SizedBox(height: 26),
 
                 ///////////////  Generate Design Button
@@ -940,6 +955,66 @@ IconData _styleIcon(String styleId) {
 /// the color options range from very light (ivory) to very dark (navy).
 Color _iconColorFor(Color background) {
   return background.computeLuminance() > 0.55 ? AppColors.ink : Colors.white;
+}
+
+class _StepLabel extends StatelessWidget {
+  final int step;
+  final String title;
+  final bool done;
+  final bool locked;
+
+  const _StepLabel({
+    required this.step,
+    required this.title,
+    this.done = false,
+    this.locked = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color circleColor = done
+        ? AppColors.sage
+        : locked
+            ? AppColors.muted.withValues(alpha: 0.35)
+            : AppColors.sageDeep;
+    final Color textColor = locked ? AppColors.muted : AppColors.ink;
+
+    return Row(
+      children: [
+        Container(
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: done ? circleColor : Colors.transparent,
+            border: done ? null : Border.all(color: circleColor, width: 1.8),
+          ),
+          child: Center(
+            child: done
+                ? const Icon(Icons.check_rounded, size: 13, color: Colors.white)
+                : Text(
+                    '$step',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: locked ? AppColors.muted : AppColors.sageDeep,
+                    ),
+                  ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          title.toUpperCase(),
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+            color: textColor,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _SectionLabel extends StatelessWidget {
