@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -36,6 +37,26 @@ class BackendProductMatchService implements ProductMatchService {
     return decodeDataUrl(item.cropImage);
   }
 
+  /// The item's colours and materials as the backend's `colors` / `materials`
+  /// form fields; it uses them to nudge the ranking (never to filter). Nothing
+  /// is sent for a cut-out the model called unusable, or for a feature that
+  /// wasn't extracted.
+  static Map<String, String> featureFields(FurnitureItem item) {
+    final features = item.features;
+    if (!features.usable) return const {};
+    final colors = [
+      for (final c in features.colors)
+        if (c.catalogColor.isNotEmpty && c.share > 0) {'catalog_color': c.catalogColor, 'share': c.share},
+    ];
+    final materials = [
+      for (final m in features.materials) {'name': m.name, 'confidence': m.confidence},
+    ];
+    return {
+      if (colors.isNotEmpty) 'colors': jsonEncode(colors),
+      if (materials.isNotEmpty) 'materials': jsonEncode(materials),
+    };
+  }
+
   @override
   Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price}) async {
     final image = imageFor(item);
@@ -48,6 +69,7 @@ class BackendProductMatchService implements ProductMatchService {
       data: FormData.fromMap({
         'label': item.label,
         'top_k': '$count',
+        ...featureFields(item),
         if (price?.min != null) 'min_price': '${price!.min}',
         if (price?.max != null) 'max_price': '${price!.max}',
         'image': MultipartFile.fromBytes(image, filename: 'item-${item.id}.png'),

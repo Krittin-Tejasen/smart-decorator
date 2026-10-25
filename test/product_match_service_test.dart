@@ -213,6 +213,84 @@ void main() {
       expect(fields['max_price'], '10000.0');
     });
 
+    FurnitureItem withFeatures(FurnitureFeatures features) => FurnitureItem(
+          id: '3',
+          label: 'sofa',
+          confidence: 0.8,
+          bbox: BoundingBox(xMin: 0, yMin: 0, xMax: 1, yMax: 1),
+          cropImage: kSampleCropDataUrl,
+          cutoutImage: kSampleCutoutDataUrl,
+          maskImage: '',
+          maskPrecise: true,
+          features: features,
+        );
+
+    final extracted = FurnitureFeatures(
+      dominantColors: const ['#6d422c'],
+      areaPct: 5,
+      aspectRatio: 1,
+      colors: [
+        ColorSwatch(hex: '#6d422c', catalogColor: 'brown', share: 0.7),
+        ColorSwatch(hex: '#c3a687', catalogColor: 'beige', share: 0.3),
+      ],
+      materials: [MaterialGuess(name: 'wood', confidence: 0.9), MaterialGuess(name: 'fabric', confidence: 0.4)],
+      source: 'gemini',
+    );
+
+    test('sends the item colours and materials so the backend can nudge the ranking', () async {
+      final adapter = FakeAdapter(response);
+      await serviceWith(adapter).matchesFor(withFeatures(extracted));
+
+      final fields = formFields(adapter.lastRequest!);
+      expect(jsonDecode(fields['colors']!), [
+        {'catalog_color': 'brown', 'share': 0.7},
+        {'catalog_color': 'beige', 'share': 0.3},
+      ]);
+      expect(jsonDecode(fields['materials']!), [
+        {'name': 'wood', 'confidence': 0.9},
+        {'name': 'fabric', 'confidence': 0.4},
+      ]);
+    });
+
+    test('sends only what was extracted: colours without materials when the model was not asked', () {
+      final onlyColours = FurnitureFeatures(
+        dominantColors: const [],
+        areaPct: 5,
+        aspectRatio: 1,
+        colors: [ColorSwatch(hex: '#6d422c', catalogColor: 'brown', share: 1)],
+      );
+      final fields = BackendProductMatchService.featureFields(withFeatures(onlyColours));
+      expect(fields.keys, ['colors']);
+    });
+
+    test('sends nothing for items with no extracted features or an unusable cut-out', () {
+      expect(BackendProductMatchService.featureFields(withImages('sofa')), isEmpty);
+
+      final unusable = FurnitureFeatures(
+        dominantColors: const [],
+        areaPct: 5,
+        aspectRatio: 1,
+        colors: extracted.colors,
+        materials: extracted.materials,
+        source: 'gemini',
+        usable: false,
+      );
+      expect(BackendProductMatchService.featureFields(withFeatures(unusable)), isEmpty);
+    });
+
+    test('ignores colours without a catalog word or a share', () {
+      final messy = FurnitureFeatures(
+        dominantColors: const [],
+        areaPct: 5,
+        aspectRatio: 1,
+        colors: [
+          ColorSwatch(hex: '#000000', catalogColor: '', share: 0.5),
+          ColorSwatch(hex: '#111111', catalogColor: 'black', share: 0),
+        ],
+      );
+      expect(BackendProductMatchService.featureFields(withFeatures(messy)), isEmpty);
+    });
+
     test('a response without matches is an empty list', () async {
       final matches = await serviceWith(FakeAdapter({'matches': []})).matchesFor(withImages('sofa'));
       expect(matches, isEmpty);
