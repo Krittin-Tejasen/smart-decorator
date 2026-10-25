@@ -57,6 +57,13 @@ DEFAULT_TYPE_WEIGHT = 0.6  # bed, lamp, rug, curtain, mirror, decor, unknown
 # Material groups that say nothing: on 76% of rows (plastic) / "unknown" (other).
 _NEUTRAL_GROUPS = frozenset({"plastic", "other"})
 
+# A product whose colour/material the catalog doesn't tell us is not a perfect
+# match, so it counts as a half match rather than as no penalty. With "no
+# penalty" such products (14% of candidates, no colour label) jumped ahead of
+# known-but-imperfect ones and filled 30% of the top-3 slots instead of the 13%
+# the picture alone gives them (33 items, real index).
+UNKNOWN_FIT = 0.5
+
 
 # ── Colour ──────────────────────────────────────────────────────────────────
 
@@ -169,9 +176,16 @@ def type_weight(furniture_type: str | None) -> float:
     return TYPE_WEIGHT.get(furniture_type or "", DEFAULT_TYPE_WEIGHT)
 
 
+def has_informative_material(item_materials: Iterable[tuple[str, float]]) -> bool:
+    """Whether the item has any material guess other than plastic/other."""
+    return any(group not in _NEUTRAL_GROUPS for group, _ in item_materials)
+
+
 def feature_penalty(furniture_type: str | None, color: float | None, material: float | None) -> float:
     """What the colour and material fits cost a candidate in ranking score, at
-    most (COLOR_PENALTY_MAX + MATERIAL_PENALTY_MAX) * the type's weight."""
+    most (COLOR_PENALTY_MAX + MATERIAL_PENALTY_MAX) * the type's weight. A fit
+    of None means "no opinion" and costs nothing; callers pass UNKNOWN_FIT for
+    a product whose side is unknown while the item's side is known."""
     cost = 0.0
     if color is not None:
         cost += COLOR_PENALTY_MAX * (1.0 - color)

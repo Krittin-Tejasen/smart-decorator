@@ -217,6 +217,31 @@ class RankingTests(unittest.TestCase):
         cabinet = rank([(0.85, row(1, "blue"))], item_colors=self.brown_item, furniture_type="cabinet")[0]
         self.assertGreater(cabinet.rank_score, sofa.rank_score)
 
+    def test_unknown_colour_is_a_half_match_between_a_match_and_a_mismatch(self):
+        got = rank([(0.85, row(1, "blue")), (0.85, row(2, None)), (0.85, row(3, "brown"))],
+                   item_colors=self.brown_item, furniture_type="sofa")
+        self.assertEqual([c.row["unique_id"] for c in got], ["3", "2", "1"])
+
+    def test_unknown_colour_no_longer_beats_a_known_near_match_with_the_same_picture_score(self):
+        got = rank([(0.85, row(1, None)), (0.85, row(2, "brown"))], item_colors=self.brown_item, furniture_type="sofa")
+        self.assertEqual(got[0].row["unique_id"], "2")
+
+    def test_unknown_stays_unknown_on_the_card_and_costs_nothing_without_item_features(self):
+        with_features = rank([(0.85, row(1, None))], item_colors=self.brown_item, furniture_type="sofa")[0]
+        self.assertIsNone(with_features.color_fit)
+        self.assertLess(with_features.rank_score, 0.85)
+        bare = rank([(0.85, row(1, None))], furniture_type="sofa")[0]
+        self.assertEqual(bare.rank_score, 0.85)
+
+    def test_unknown_material_only_counts_when_the_item_has_an_informative_one(self):
+        no_tags = row(1)
+        wood = rank([(0.85, no_tags)], item_materials=(("wood", 0.9),), furniture_type="chair")[0]
+        self.assertLess(wood.rank_score, 0.85)
+        only_plastic = rank([(0.85, no_tags)], item_materials=(("plastic", 0.9),), furniture_type="chair")[0]
+        self.assertEqual(only_plastic.rank_score, 0.85)
+        self.assertTrue(mf.has_informative_material([("wood", 0.9)]))
+        self.assertFalse(mf.has_informative_material([("plastic", 0.9), ("other", 0.5)]))
+
     def test_unknown_product_colour_is_not_punished(self):
         got = rank([(0.85, row(1, None)), (0.85, row(2, "blue"))],
                    item_colors=self.brown_item, furniture_type="sofa")

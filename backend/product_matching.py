@@ -42,8 +42,10 @@ from PIL import Image
 from app.core.config import settings
 from app.services.furniture_types import FURNITURE_TYPES, image_group_key, label_to_type
 from match_features import (
+    UNKNOWN_FIT,
     color_fit,
     feature_penalty,
+    has_informative_material,
     material_fit,
     parse_item_colors,
     parse_item_materials,
@@ -143,10 +145,18 @@ class Candidate:
     def __post_init__(self) -> None:
         self.color_fit = color_fit(self.item_colors, self.row.get("color_extracted"))
         self.material_fit = material_fit(self.item_materials, self.row)
+        # The item says something but the product's catalog row doesn't: a half
+        # match, not a free pass (color_fit/material_fit stay None for the card).
+        color_used = UNKNOWN_FIT if (self.color_fit is None and self.item_colors) else self.color_fit
+        material_used = (
+            UNKNOWN_FIT
+            if (self.material_fit is None and has_informative_material(self.item_materials))
+            else self.material_fit
+        )
         self.rank_score = (
             self.score
             - size_penalty(self.target_width_cm, self.row.get("width_cm"))
-            - feature_penalty(self.furniture_type, self.color_fit, self.material_fit)
+            - feature_penalty(self.furniture_type, color_used, material_used)
         )
 
 
