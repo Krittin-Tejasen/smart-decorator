@@ -96,6 +96,16 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 from pydantic import BaseModel
 
+from feature_extraction import (
+    ColorSwatch,
+    EnrichInput,
+    Enrichment,
+    FeatureMeta,
+    MaterialGuess,
+    enrich_features,
+    extract_swatches,
+)
+
 router = APIRouter(tags=["segmentation"])
 
 # ── Furniture vocabulary used as the Grounding DINO text prompt ────────────
@@ -181,9 +191,16 @@ class BoundingBox(BaseModel):
 
 
 class FurnitureFeatures(BaseModel):
-    dominant_colors: list[str]  # e.g. ["#8b4513", "#d2b48c", "#ffffff"]
+    dominant_colors: list[str]  # e.g. ["#8b4513", "#d2b48c", "#ffffff"] — == [c.hex for c in colors]
     area_pct: float             # percentage of total image area
     aspect_ratio: float         # bbox width / height
+    # ── feature extraction (see feature_extraction.py). All new fields have
+    # defaults so results saved before they existed still parse.
+    colors: list[ColorSwatch] = []       # ≤3, measured in CIELAB from the item's own pixels
+    materials: list[MaterialGuess] = []  # ≤2 from Gemini; empty when not enriched
+    finish: str | None = None            # e.g. "light oak, matte"
+    color_name: str | None = None        # Gemini's name for the main surface, e.g. "terracotta" (display only)
+    meta: FeatureMeta = FeatureMeta()
 
 
 class FurnitureItem(BaseModel):
@@ -328,13 +345,23 @@ def _build_item(
 
     if mask is not None:
         mask_precise = True
-        colors = _dominant_hex_colors(crop, mask=mask.crop(px))
+        item_mask = mask.crop(px)
+        colors = _dominant_hex_colors(crop, mask=item_mask)
     else:
         # No usable SAM 2 mask — approximate with a filled bbox rectangle.
         mask = Image.new("L", (W, H), 0)
         ImageDraw.Draw(mask).rectangle(px, fill=255)
         mask_precise = False
+        item_mask = None
         colors = _dominant_hex_colors(crop)
+
+    # Measured colours of the item's own pixels (whole box when there's no mask).
+    swatch_source = crop.convert("RGBA")
+    if item_mask is not None:
+        swatch_source.putalpha(item_mask)
+    swatches = extract_swatches(swatch_source)
+    if swatches:
+        colors = [s.hex for s in swatches]
 
     return FurnitureItem(
         id=str(idx),
@@ -354,6 +381,7 @@ def _build_item(
             dominant_colors=colors,
             area_pct=round(w_px * h_px / (W * H) * 100, 2),
             aspect_ratio=round(w_px / h_px, 3),
+            colors=swatches,
         ),
     )
 
@@ -704,6 +732,42 @@ def _persist_result(result: SegmentationResult) -> str | None:
         return None
 
 
+def _decode_data_url_image(data_url: str) -> Image.Image:
+    return Image.open(BytesIO(base64.b64decode(data_url.split(",", 1)[1])))
+
+
+def apply_enrichment(item: FurnitureItem, enrichment: Enrichment) -> None:
+    """Copy Gemini's answer onto an item (in place)."""
+    features = item.features
+    features.materials = enrichment.materials
+    features.finish = enrichment.finish
+    features.color_name = enrichment.color_name
+    features.meta = FeatureMeta(source="gemini", usable=enrichment.usable)
+
+
+async def _enrich_items(items: list[FurnitureItem]) -> None:
+    """One Gemini call for the whole room: material, finish, colour name, usable.
+    Never raises — on any failure items keep their pixel-based features."""
+    if not items:
+        return
+    try:
+        inputs = [
+            EnrichInput(
+                id=item.id,
+                label=item.label,
+                image=_decode_data_url_image(item.cutout_image or item.crop_image),
+            )
+            for item in items
+        ]
+        enriched = await enrich_features(inputs)
+    except Exception as exc:
+        print(f"[segmentation] feature enrichment skipped: {type(exc).__name__}: {exc}")
+        return
+    for item in items:
+        if item.id in enriched:
+            apply_enrichment(item, enriched[item.id])
+
+
 async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationResult:
     """
     Public helper — also called from main.py's /generate-room when segment=true.
@@ -786,6 +850,8 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
         _build_item(img, d["label"], d["confidence"], idx, *d["box"], d["mask"])
         for idx, d in enumerate(detections)
     ]
+
+    await _enrich_items(items)
 
     counts = dict(Counter(item.label for item in items))
     result = SegmentationResult(
