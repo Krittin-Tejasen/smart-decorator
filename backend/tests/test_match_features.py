@@ -291,5 +291,19 @@ class EndpointFilterTests(unittest.TestCase):
         self.assertIn("pip install -r requirements.txt", resp.json()["detail"])
 
 
+class MaterialLabelTests(unittest.TestCase):
+    def test_every_tag_is_shown_not_only_the_first(self):
+        self.assertEqual(pm.material_label({"material_tags": "Wood|Metal", "material_tag": "Wood"}), "Wood, Metal")
+
+    def test_falls_back_to_the_single_tag_and_drops_repeats_and_blanks(self):
+        self.assertEqual(pm.material_label({"material_tag": "Plastic"}), "Plastic")
+        self.assertEqual(pm.material_label({"material_tags": "Wood| wood |Metal||"}), "Wood, Metal")
+        self.assertIsNone(pm.material_label({}))
+
+    def test_the_card_json_uses_it(self):
+        candidate = pm.Candidate(row={"unique_id": "a", "material_tags": "Wood|Metal", "material_tag": "Wood"}, score=0.9)
+        self.assertEqual(pm.to_product_match(candidate, True)["material"], "Wood, Metal")
+
+
 if __name__ == "__main__":
     unittest.main()

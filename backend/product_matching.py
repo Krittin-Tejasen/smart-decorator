@@ -179,6 +179,18 @@ def confidence_of(score: float) -> str:
     return "low"
 
 
+def material_label(row: dict[str, Any]) -> str | None:
+    """Every material tag of a product, e.g. "Wood, Metal" for "Wood|Metal".
+    Only the first tag used to be shown, so a product that passed the material
+    filter on its Metal tag read as "Wood"."""
+    tags: list[str] = []
+    for part in str(row.get("material_tags") or row.get("material_tag") or "").split("|"):
+        part = part.strip()
+        if part and part.lower() not in {t.lower() for t in tags}:
+            tags.append(part)
+    return ", ".join(tags) or None
+
+
 def to_product_match(candidate: Candidate, link_ok: bool | None) -> dict[str, Any]:
     """The JSON the app reads into its ProductMatch model."""
     row = candidate.row
@@ -192,7 +204,7 @@ def to_product_match(candidate: Candidate, link_ok: bool | None) -> dict[str, An
         "depth_cm": _as_float(row.get("depth_cm")),
         "height_cm": _as_float(row.get("height_cm")),
         "color_name": row.get("color_extracted") or None,
-        "material": row.get("material_tag") or None,
+        "material": material_label(row),
         "in_stock": bool(row.get("in_stock")),
         "url": row.get("url") or None,
         "country_code": row.get("country_code") or None,
