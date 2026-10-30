@@ -19,6 +19,10 @@ class FurnitureMatchesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final matches = ref.watch(furnitureMatchesProvider(item));
+    final filter = ref.watch(matchFilterProvider);
+    // A switch only counts for an item it is available for.
+    final filtering = (filter.colour && item.features.canFilterByColour) ||
+        (filter.material && item.features.canFilterByMaterial);
     final isSample = matches.valueOrNull?.any((m) => m.isSample) ?? false;
 
     return Scaffold(
@@ -65,8 +69,8 @@ class FurnitureMatchesScreen extends ConsumerWidget {
           ],
 
           if (!isSample) ...[
-            const SizedBox(height: 10),
-            _FeatureToggles(item: item),
+            const SizedBox(height: 12),
+            _FilterSwitches(item: item),
           ],
 
           const SizedBox(height: 14),
@@ -77,7 +81,7 @@ class FurnitureMatchesScreen extends ConsumerWidget {
               onRetry: () => ref.invalidate(furnitureMatchesProvider(item)),
             ),
             data: (products) => products.isEmpty
-                ? const _NoMatches()
+                ? _NoMatches(filtering: filtering)
                 : Column(
                     children: [
                       for (final product in products) ...[
@@ -95,76 +99,108 @@ class FurnitureMatchesScreen extends ConsumerWidget {
   }
 }
 
-/// "Colour" / "Material" chips: let the matcher re-rank by the item's colour
-/// and material. Unavailable when the item has none, or when the model said the
-/// cut-out is not a real item.
-class _FeatureToggles extends ConsumerWidget {
+/// "Colour" / "Material" switches: filter the matches by the item's colour and
+/// material. Unavailable when the item has none (or the model said the cut-out
+/// is not a real item, or the material has no catalog tag).
+class _FilterSwitches extends ConsumerWidget {
   final FurnitureItem item;
 
-  const _FeatureToggles({required this.item});
+  const _FilterSwitches({required this.item});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final use = ref.watch(featureUseProvider);
+    final filter = ref.watch(matchFilterProvider);
     final features = item.features;
-    final hasColour = features.usable && features.colors.isNotEmpty;
-    final hasMaterial = features.usable && features.hasMaterial;
+    final notifier = ref.read(matchFilterProvider.notifier);
 
-    Widget chip({
-      required Key key,
-      required String label,
-      required bool available,
-      required bool selected,
-      required void Function(bool) onChanged,
-    }) {
-      final child = FilterChip(
-        key: key,
-        label: Text(label),
-        selected: selected && available,
-        onSelected: available ? onChanged : null,
-        showCheckmark: false,
-        selectedColor: AppColors.brassTint,
-        backgroundColor: AppColors.surface,
-        disabledColor: AppColors.sandTint,
-        side: BorderSide(color: AppColors.ink.withValues(alpha: 0.12)),
-        labelStyle: TextStyle(
-          fontSize: 12.5,
-          color: available ? (selected ? AppColors.brassDeep : AppColors.ink) : AppColors.muted,
-        ),
-      );
-      return available ? child : Tooltip(message: 'Not detected for this item', child: child);
-    }
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.ink.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        children: [
+          _SwitchRow(
+            switchKey: const ValueKey('use-colour'),
+            title: 'Colour',
+            subtitle: features.canFilterByColour
+                ? "Only show products in this item's colour"
+                : 'Not available for this item',
+            value: filter.colour && features.canFilterByColour,
+            onChanged: features.canFilterByColour ? (on) => notifier.update((s) => s.copyWith(colour: on)) : null,
+          ),
+          Divider(height: 1, color: AppColors.ink.withValues(alpha: 0.08)),
+          _SwitchRow(
+            switchKey: const ValueKey('use-material'),
+            title: 'Material',
+            subtitle: features.canFilterByMaterial
+                ? "Only show products in this item's material"
+                : 'Not available for this item',
+            value: filter.material && features.canFilterByMaterial,
+            onChanged: features.canFilterByMaterial ? (on) => notifier.update((s) => s.copyWith(material: on)) : null,
+          ),
+        ],
+      ),
+    );
+  }
+}
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          spacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            const Text('Re-rank by', style: TextStyle(fontSize: 12, color: AppColors.muted)),
-            chip(
-              key: const ValueKey('use-colour'),
-              label: 'Colour',
-              available: hasColour,
-              selected: use.colour,
-              onChanged: (on) => ref.read(featureUseProvider.notifier).update((s) => s.copyWith(colour: on)),
+class _SwitchRow extends StatelessWidget {
+  final Key switchKey;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  const _SwitchRow({
+    required this.switchKey,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onChanged != null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: enabled ? AppColors.ink : AppColors.muted,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(subtitle, style: const TextStyle(fontSize: 11.5, color: AppColors.muted)),
+              ],
             ),
-            chip(
-              key: const ValueKey('use-material'),
-              label: 'Material',
-              available: hasMaterial,
-              selected: use.material,
-              onChanged: (on) => ref.read(featureUseProvider.notifier).update((s) => s.copyWith(material: on)),
+          ),
+          Switch(
+            key: switchKey,
+            value: value,
+            onChanged: onChanged,
+            thumbColor: const WidgetStatePropertyAll(Colors.white),
+            trackColor: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.disabled)
+                  ? AppColors.sandTint
+                  : states.contains(WidgetState.selected)
+                      ? AppColors.sage
+                      : AppColors.sand,
             ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Only changes the order of the matches; none are hidden.',
-          style: TextStyle(fontSize: 11.5, color: AppColors.muted),
-        ),
-      ],
+            trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -183,24 +219,36 @@ String? describeTraits(FurnitureFeatures features) {
 /// Nothing in the catalog was similar enough. Said plainly rather than
 /// showing weak guesses.
 class _NoMatches extends StatelessWidget {
-  const _NoMatches();
+  /// A colour or material filter is on, so it may be what removed everything.
+  final bool filtering;
+
+  const _NoMatches({this.filtering = false});
 
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 30),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 30),
       child: Column(
         children: [
-          Text(
+          const Text(
             'No matching products found',
             style: TextStyle(color: AppColors.muted),
           ),
-          SizedBox(height: 4),
-          Text(
+          const SizedBox(height: 4),
+          const Text(
             'Nothing in the catalog looks close enough to this item.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: AppColors.muted),
           ),
+          if (filtering) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Try switching off the colour or material filter.',
+              key: ValueKey('filter-hint'),
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: AppColors.brassDeep),
+            ),
+          ],
         ],
       ),
     );

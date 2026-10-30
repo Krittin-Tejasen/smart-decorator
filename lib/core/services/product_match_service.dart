@@ -8,24 +8,26 @@ import '../../shared/models/product_match.dart';
 import '../../shared/utils/data_url.dart';
 import 'api_service.dart';
 
-/// Which of an item's extracted features the backend may use to re-rank its
-/// matches. They only reorder results (never remove any), and both are off by
-/// default: there is no evidence yet that they improve the matches.
-class FeatureUse {
+/// Which of an item's extracted features the matches are filtered by (the two
+/// switches on the matches page). A filter hides every product that does not
+/// match, so it can leave nothing; both are off by default.
+class MatchFilter {
   final bool colour;
   final bool material;
 
-  const FeatureUse({this.colour = false, this.material = false});
+  const MatchFilter({this.colour = false, this.material = false});
 
-  static const none = FeatureUse();
-  static const all = FeatureUse(colour: true, material: true);
+  static const none = MatchFilter();
+  static const all = MatchFilter(colour: true, material: true);
 
-  FeatureUse copyWith({bool? colour, bool? material}) =>
-      FeatureUse(colour: colour ?? this.colour, material: material ?? this.material);
+  bool get isOn => colour || material;
+
+  MatchFilter copyWith({bool? colour, bool? material}) =>
+      MatchFilter(colour: colour ?? this.colour, material: material ?? this.material);
 
   @override
   bool operator ==(Object other) =>
-      other is FeatureUse && other.colour == colour && other.material == material;
+      other is MatchFilter && other.colour == colour && other.material == material;
 
   @override
   int get hashCode => Object.hash(colour, material);
@@ -39,7 +41,7 @@ abstract class ProductMatchService {
   Future<List<ProductMatch>> matchesFor(
     FurnitureItem item, {
     PriceRange? price,
-    FeatureUse use = FeatureUse.none,
+    MatchFilter filter = MatchFilter.none,
   });
 }
 
@@ -65,19 +67,20 @@ class BackendProductMatchService implements ProductMatchService {
   }
 
   /// The item's colours and materials as the backend's `colors` / `materials`
-  /// form fields; it uses them to nudge the ranking (never to filter). Only the
-  /// features switched on in [use] are sent, and nothing for a cut-out the model
-  /// called unusable or for a feature that was not extracted.
-  static Map<String, String> featureFields(FurnitureItem item, {FeatureUse use = FeatureUse.all}) {
+  /// form fields; when present, the backend keeps only products with a matching
+  /// colour / material. Only the features switched on in [filter] are sent, and
+  /// nothing for a cut-out the model called unusable or for a feature that was
+  /// not extracted.
+  static Map<String, String> featureFields(FurnitureItem item, {MatchFilter filter = MatchFilter.all}) {
     final features = item.features;
     if (!features.usable) return const {};
     final colors = [
-      if (use.colour)
+      if (filter.colour)
         for (final c in features.colors)
           if (c.catalogColor.isNotEmpty && c.share > 0) {'catalog_color': c.catalogColor, 'share': c.share},
     ];
     final materials = [
-      if (use.material)
+      if (filter.material)
         for (final m in features.materials) {'name': m.name, 'confidence': m.confidence},
     ];
     return {
@@ -90,7 +93,7 @@ class BackendProductMatchService implements ProductMatchService {
   Future<List<ProductMatch>> matchesFor(
     FurnitureItem item, {
     PriceRange? price,
-    FeatureUse use = FeatureUse.none,
+    MatchFilter filter = MatchFilter.none,
   }) async {
     final image = imageFor(item);
     if (image == null) {
@@ -102,7 +105,7 @@ class BackendProductMatchService implements ProductMatchService {
       data: FormData.fromMap({
         'label': item.label,
         'top_k': '$count',
-        ...featureFields(item, use: use),
+        ...featureFields(item, filter: filter),
         if (price?.min != null) 'min_price': '${price!.min}',
         if (price?.max != null) 'max_price': '${price!.max}',
         'image': MultipartFile.fromBytes(image, filename: 'item-${item.id}.png'),
@@ -132,7 +135,7 @@ class SampleProductMatchService implements ProductMatchService {
   Future<List<ProductMatch>> matchesFor(
     FurnitureItem item, {
     PriceRange? price,
-    FeatureUse use = FeatureUse.none,
+    MatchFilter filter = MatchFilter.none,
   }) async {
     final matches = _sampleMatches(item);
     return price == null ? matches : matches.where((m) => price.contains(m.price)).toList();

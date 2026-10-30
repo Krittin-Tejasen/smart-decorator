@@ -116,6 +116,34 @@ void main() {
     });
   });
 
+  group('what the matches can be filtered by', () {
+    FurnitureFeatures features({List<MeasuredColor> colors = const [], List<String> materials = const [], bool usable = true}) =>
+        FurnitureFeatures(
+          dominantColors: const [],
+          areaPct: 1,
+          aspectRatio: 1,
+          colors: colors,
+          materials: [for (final m in materials) MaterialGuess(name: m, confidence: 0.9)],
+          usable: usable,
+        );
+    final brown = [MeasuredColor(hex: '#6d422c', catalogColor: 'brown', share: 1)];
+
+    test('colour needs a measured colour and a real item', () {
+      expect(features(colors: brown).canFilterByColour, isTrue);
+      expect(features().canFilterByColour, isFalse);
+      expect(features(colors: brown, usable: false).canFilterByColour, isFalse);
+    });
+
+    test('material needs one the catalog has a tag for', () {
+      expect(features(materials: ['wood']).canFilterByMaterial, isTrue);
+      expect(features(materials: ['ceramic', 'wood']).canFilterByMaterial, isTrue);
+      expect(features(materials: ['ceramic']).canFilterByMaterial, isFalse);
+      expect(features(materials: ['plastic', 'paper', 'stone']).canFilterByMaterial, isFalse);
+      expect(features().canFilterByMaterial, isFalse);
+      expect(features(materials: ['wood'], usable: false).canFilterByMaterial, isFalse);
+    });
+  });
+
   group('SegmentationResult.fromJson', () {
     Map<String, dynamic> resultJson({Object? reason = 'omit'}) => {
           'items': [itemJson()],

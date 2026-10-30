@@ -52,6 +52,11 @@ class MaterialGuess {
       );
 }
 
+/// The materials the catalog can be filtered by (it tags wood, fabric, metal,
+/// glass); rattan counts as wood and leather as fabric. Plastic, ceramic,
+/// stone and paper have no usable tag. Mirrors backend/match_features.py.
+const filterableMaterials = {'wood', 'rattan', 'fabric', 'leather', 'metal', 'glass'};
+
 class FurnitureFeatures {
   final List<String> dominantColors;
   final double areaPct;
@@ -90,6 +95,12 @@ class FurnitureFeatures {
   });
 
   bool get hasMaterial => materials.isNotEmpty;
+
+  /// Whether the matches can be filtered by this item's colour.
+  bool get canFilterByColour => usable && colors.isNotEmpty;
+
+  /// Whether the matches can be filtered by this item's material.
+  bool get canFilterByMaterial => usable && materials.any((m) => filterableMaterials.contains(m.name));
 
   factory FurnitureFeatures.fromJson(Map<String, dynamic> json) {
     final colors = json['dominant_colors'];

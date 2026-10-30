@@ -237,9 +237,9 @@ void main() {
       source: 'gemini',
     );
 
-    test('sends the item colours and materials so the backend can nudge the ranking', () async {
+    test('sends the item colours and materials so the backend can filter the matches', () async {
       final adapter = FakeAdapter(response);
-      await serviceWith(adapter).matchesFor(withFeatures(extracted), use: FeatureUse.all);
+      await serviceWith(adapter).matchesFor(withFeatures(extracted), filter: MatchFilter.all);
 
       final fields = formFields(adapter.lastRequest!);
       expect(jsonDecode(fields['colors']!), [
@@ -252,7 +252,7 @@ void main() {
       ]);
     });
 
-    test('by default neither colour nor material is sent (both toggles start off)', () async {
+    test('by default neither colour nor material is sent (both switches start off)', () async {
       final adapter = FakeAdapter(response);
       await serviceWith(adapter).matchesFor(withFeatures(extracted));
 
@@ -263,16 +263,16 @@ void main() {
     test('colour and material are sent independently, as switched on', () {
       final item = withFeatures(extracted);
 
-      expect(BackendProductMatchService.featureFields(item, use: const FeatureUse(colour: true)).keys, ['colors']);
-      expect(BackendProductMatchService.featureFields(item, use: const FeatureUse(material: true)).keys, ['materials']);
-      expect(BackendProductMatchService.featureFields(item, use: FeatureUse.none), isEmpty);
-      expect(BackendProductMatchService.featureFields(item, use: FeatureUse.all).keys, ['colors', 'materials']);
+      expect(BackendProductMatchService.featureFields(item, filter: const MatchFilter(colour: true)).keys, ['colors']);
+      expect(BackendProductMatchService.featureFields(item, filter: const MatchFilter(material: true)).keys, ['materials']);
+      expect(BackendProductMatchService.featureFields(item, filter: MatchFilter.none), isEmpty);
+      expect(BackendProductMatchService.featureFields(item, filter: MatchFilter.all).keys, ['colors', 'materials']);
     });
 
-    test('FeatureUse compares by value', () {
-      expect(const FeatureUse(colour: true), const FeatureUse(colour: true));
-      expect(const FeatureUse(colour: true), isNot(const FeatureUse(material: true)));
-      expect(FeatureUse.none.copyWith(colour: true, material: true), FeatureUse.all);
+    test('MatchFilter compares by value', () {
+      expect(const MatchFilter(colour: true), const MatchFilter(colour: true));
+      expect(const MatchFilter(colour: true), isNot(const MatchFilter(material: true)));
+      expect(MatchFilter.none.copyWith(colour: true, material: true), MatchFilter.all);
     });
 
     test('sends only what was extracted: colours without materials when the model was not asked', () {
