@@ -57,6 +57,7 @@ backend/
 ├── main.py                    # FastAPI app — /generate-room, mounts segmentation router
 ├── segmentation.py            # /segment-furniture — local Grounding DINO + SAM 2 / Gemini Vision detection
 ├── test_segmentation.py       # CLI script to test /segment-furniture against local images
+├── compare_segmentation.py    # Before/after SAM 2 masks side by side, run locally
 └── requirements.txt           # Python dependencies
 
 ios/

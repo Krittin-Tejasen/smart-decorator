@@ -26,5 +26,7 @@ sam2
 
 # Product matching (CLIP embedding + Pinecone vector search) — see
 # product_matching.py. The catalog itself is read from Supabase (supabase above).
+# sentence-transformers' clip-ViT-B-32 is also segmentation's second opinion
+# on DINO's labels (optional there; segmentation runs without it).
 pinecone
 sentence-transformers
