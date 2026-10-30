@@ -13,6 +13,7 @@ python-dotenv
 httpx
 
 pydantic
+pydantic-settings
 
 # Local furniture segmentation (Grounding DINO + SAM 2) — see the Furniture
 # Segmentation section of the README for setup, incl. downloading a SAM 2
@@ -22,6 +23,10 @@ torch
 torchvision
 transformers
 sam2
-# clip-ViT-B-32, also what product matching embeds with: second opinion on
-# DINO's labels (optional; segmentation runs without it).
+
+# Product matching (CLIP embedding + Pinecone vector search) — see
+# product_matching.py. The catalog itself is read from Supabase (supabase above).
+# sentence-transformers' clip-ViT-B-32 is also segmentation's second opinion
+# on DINO's labels (optional there; segmentation runs without it).
+pinecone
 sentence-transformers

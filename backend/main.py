@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from generation import router as generation_router
+from product_matching import router as product_matching_router
 from segmentation import router as segmentation_router
 
 for _env_name in (".env", "backend.env"):
@@ -12,6 +13,7 @@ for _env_name in (".env", "backend.env"):
 app = FastAPI()
 app.include_router(generation_router)
 app.include_router(segmentation_router)
+app.include_router(product_matching_router)
 
 
 @app.get("/")

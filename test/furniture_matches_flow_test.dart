@@ -10,6 +10,7 @@ import 'package:smart_decorator/features/results/presentation/results_screen.dar
 import 'package:smart_decorator/features/results/providers/furniture_matches_provider.dart';
 import 'package:smart_decorator/features/results/widgets/furniture_image.dart';
 import 'package:smart_decorator/features/results/widgets/furniture_segment_card.dart';
+import 'package:smart_decorator/features/results/widgets/product_match_card.dart';
 import 'package:smart_decorator/routes/app_router.dart';
 import 'package:smart_decorator/shared/models/furniture_item.dart';
 import 'package:smart_decorator/shared/models/product_match.dart';
@@ -50,12 +51,14 @@ class ControlledService implements ProductMatchService {
   int calls = 0;
 
   @override
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item) => onCall(item, ++calls);
+  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price}) => onCall(item, ++calls);
 }
 
 late GoRouter router;
 
-Widget appWith(List<FurnitureItem> items, {ProductMatchService? service}) {
+/// The sample matcher unless a test passes its own, so no test calls the
+/// real backend.
+Widget appWith(List<FurnitureItem> items, {ProductMatchService service = const SampleProductMatchService()}) {
   router = GoRouter(
     initialLocation: '/results',
     routes: [
@@ -67,7 +70,7 @@ Widget appWith(List<FurnitureItem> items, {ProductMatchService? service}) {
   return ProviderScope(
     overrides: [
       appStateProvider.overrideWith((ref) => FakeAppState(items)),
-      if (service != null) productMatchServiceProvider.overrideWithValue(service),
+      productMatchServiceProvider.overrideWithValue(service),
     ],
     child: MaterialApp.router(routerConfig: router),
   );
@@ -205,7 +208,7 @@ void main() {
       // it is obvious this is not real matching
       expect(find.text('Matching products'), findsOneWidget);
       expect(find.text('Sample data'), findsOneWidget);
-      expect(find.textContaining('Real product matching is still in development'), findsOneWidget);
+      expect(find.textContaining('not real catalog products'), findsOneWidget);
 
       // the three products, most similar first
       expect(find.text('Sofa #1'), findsOneWidget);
@@ -213,8 +216,9 @@ void main() {
       expect(find.text('Sofa #3'), findsOneWidget);
       expect(find.text('94% match'), findsOneWidget);
       expect(find.text('Sample'), findsNWidgets(3), reason: 'every product card is tagged');
-      expect(find.textContaining('฿'), findsNWidgets(3));
-      expect(find.textContaining('cm'), findsNWidgets(3));
+      final cards = find.byType(ProductMatchCard);
+      expect(find.descendant(of: cards, matching: find.textContaining('฿')), findsNWidgets(3));
+      expect(find.descendant(of: cards, matching: find.textContaining('cm')), findsNWidgets(3));
     });
 
     testWidgets('the tapped item is the one shown', (tester) async {
@@ -339,6 +343,67 @@ void main() {
       expect(find.text('W 228 × D 95 × H 83 cm'), findsOneWidget);
       expect(find.text('91% match'), findsOneWidget);
       expect(find.text('Sample'), findsNothing);
+      expect(find.text('Sample data'), findsNothing, reason: 'no sample badge for real results');
+      expect(find.textContaining('not real catalog products'), findsNothing);
+    });
+
+    testWidgets('no confident match explains why', (tester) async {
+      usePhone(tester);
+      await tester.pumpWidget(appWith([furniture('sofa')], service: ControlledService((_, _) async => const [])));
+      await settle(tester);
+      await tapCard(tester, 'Sofa');
+
+      expect(find.textContaining('Nothing in the catalog looks close enough'), findsOneWidget);
+    });
+
+    testWidgets('there is no price filter on the page (removed for now)', (tester) async {
+      usePhone(tester);
+      await tester.pumpWidget(appWith([furniture('sofa')]));
+      await settle(tester);
+      await tapCard(tester, 'Sofa');
+
+      expect(find.byType(ChoiceChip), findsNothing);
+      expect(find.text('Any price'), findsNothing);
+    });
+  });
+
+  group('store link', () {
+    const withLink = ProductMatch(
+      id: '1', name: 'KIVIK 3-seat sofa', price: 19990, category: 'Sofa', score: 0.9,
+      url: 'https://www.ikea.com/gb/en/p/kivik-sofa-s19440533/',
+    );
+
+    Widget card(ProductMatch product, OpenProductLink open) =>
+        MaterialApp(home: Scaffold(body: ProductMatchCard(product: product, openLink: open)));
+
+    testWidgets('opens the product page', (tester) async {
+      final opened = <Uri>[];
+      await tester.pumpWidget(card(withLink, (url) async {
+        opened.add(url);
+        return true;
+      }));
+
+      expect(find.text('View at IKEA'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('product-store-link')));
+      await tester.pump();
+
+      expect(opened, [Uri.parse(withLink.url!)]);
+    });
+
+    testWidgets('says so when the page cannot be opened', (tester) async {
+      await tester.pumpWidget(card(withLink, (url) async => false));
+
+      await tester.tap(find.byKey(const ValueKey('product-store-link')));
+      await tester.pump();
+
+      expect(find.text('Could not open the store page'), findsOneWidget);
+    });
+
+    testWidgets('no link, no button', (tester) async {
+      const noLink = ProductMatch(id: '2', name: 'n', price: 1, category: 'c', score: 0.9);
+      await tester.pumpWidget(card(noLink, (url) async => true));
+
+      expect(find.byKey(const ValueKey('product-store-link')), findsNothing);
     });
   });
 }

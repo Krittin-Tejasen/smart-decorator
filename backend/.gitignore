@@ -12,3 +12,6 @@ checkpoints/
 *.pt
 *.pth
 compare/
+
+# Local progress/snapshots of the scripts/ catalog jobs
+scripts/.*.json
