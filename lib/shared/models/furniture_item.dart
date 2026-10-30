@@ -23,16 +23,16 @@ class BoundingBox {
 
 /// One measured colour of an item. [catalogColor] is one of the product
 /// catalog's 12 colour words (white, beige, gray, brown …) — the key for matching.
-class ColorSwatch {
+class MeasuredColor {
   final String hex;
   final String catalogColor;
 
   /// Share of the item's pixels, 0-1.
   final double share;
 
-  ColorSwatch({required this.hex, required this.catalogColor, required this.share});
+  MeasuredColor({required this.hex, required this.catalogColor, required this.share});
 
-  factory ColorSwatch.fromJson(Map<String, dynamic> json) => ColorSwatch(
+  factory MeasuredColor.fromJson(Map<String, dynamic> json) => MeasuredColor(
         hex: _text(json['hex']) ?? '',
         catalogColor: _text(json['catalog_color']) ?? '',
         share: _number(json['share']),
@@ -58,7 +58,7 @@ class FurnitureFeatures {
   final double aspectRatio;
 
   /// Measured colours, most common first (empty for results from an older backend).
-  final List<ColorSwatch> colors;
+  final List<MeasuredColor> colors;
 
   /// Up to two materials, most likely first (empty when the backend couldn't
   /// or didn't ask the model — see [source]).
@@ -105,7 +105,7 @@ class FurnitureFeatures {
       colors: swatches is List
           ? swatches
               .whereType<Map<String, dynamic>>()
-              .map(ColorSwatch.fromJson)
+              .map(MeasuredColor.fromJson)
               .toList()
           : const [],
       materials: materials is List

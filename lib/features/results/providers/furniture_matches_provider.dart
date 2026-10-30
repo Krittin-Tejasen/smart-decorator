@@ -9,6 +9,10 @@ final productMatchServiceProvider = Provider<ProductMatchService>(
   (ref) => BackendProductMatchService(),
 );
 
+/// Whether the matcher may use the items' colour / material to re-rank the
+/// matches (the two chips on the matches page). Off until it is shown to help.
+final featureUseProvider = StateProvider<FeatureUse>((ref) => FeatureUse.none);
+
 /// The products proposed for one detected piece of furniture.
 ///
 /// There is no price filter in the UI for now. The matcher still accepts a
@@ -16,5 +20,6 @@ final productMatchServiceProvider = Provider<ProductMatchService>(
 /// screen change plus a family key that carries the range.
 final furnitureMatchesProvider = FutureProvider.autoDispose
     .family<List<ProductMatch>, FurnitureItem>((ref, item) {
-  return ref.watch(productMatchServiceProvider).matchesFor(item);
+  final use = ref.watch(featureUseProvider);
+  return ref.watch(productMatchServiceProvider).matchesFor(item, use: use);
 });

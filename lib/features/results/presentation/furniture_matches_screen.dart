@@ -64,6 +64,11 @@ class FurnitureMatchesScreen extends ConsumerWidget {
             const _SampleNote(),
           ],
 
+          if (!isSample) ...[
+            const SizedBox(height: 10),
+            _FeatureToggles(item: item),
+          ],
+
           const SizedBox(height: 14),
 
           matches.when(
@@ -86,6 +91,80 @@ class FurnitureMatchesScreen extends ConsumerWidget {
       ),
 
       bottomNavigationBar: const AppFooterNav(current: FooterTab.none),
+    );
+  }
+}
+
+/// "Colour" / "Material" chips: let the matcher re-rank by the item's colour
+/// and material. Unavailable when the item has none, or when the model said the
+/// cut-out is not a real item.
+class _FeatureToggles extends ConsumerWidget {
+  final FurnitureItem item;
+
+  const _FeatureToggles({required this.item});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final use = ref.watch(featureUseProvider);
+    final features = item.features;
+    final hasColour = features.usable && features.colors.isNotEmpty;
+    final hasMaterial = features.usable && features.hasMaterial;
+
+    Widget chip({
+      required Key key,
+      required String label,
+      required bool available,
+      required bool selected,
+      required void Function(bool) onChanged,
+    }) {
+      final child = FilterChip(
+        key: key,
+        label: Text(label),
+        selected: selected && available,
+        onSelected: available ? onChanged : null,
+        showCheckmark: false,
+        selectedColor: AppColors.brassTint,
+        backgroundColor: AppColors.surface,
+        disabledColor: AppColors.sandTint,
+        side: BorderSide(color: AppColors.ink.withValues(alpha: 0.12)),
+        labelStyle: TextStyle(
+          fontSize: 12.5,
+          color: available ? (selected ? AppColors.brassDeep : AppColors.ink) : AppColors.muted,
+        ),
+      );
+      return available ? child : Tooltip(message: 'Not detected for this item', child: child);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Text('Re-rank by', style: TextStyle(fontSize: 12, color: AppColors.muted)),
+            chip(
+              key: const ValueKey('use-colour'),
+              label: 'Colour',
+              available: hasColour,
+              selected: use.colour,
+              onChanged: (on) => ref.read(featureUseProvider.notifier).update((s) => s.copyWith(colour: on)),
+            ),
+            chip(
+              key: const ValueKey('use-material'),
+              label: 'Material',
+              available: hasMaterial,
+              selected: use.material,
+              onChanged: (on) => ref.read(featureUseProvider.notifier).update((s) => s.copyWith(material: on)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Only changes the order of the matches; none are hidden.',
+          style: TextStyle(fontSize: 11.5, color: AppColors.muted),
+        ),
+      ],
     );
   }
 }

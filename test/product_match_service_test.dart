@@ -230,8 +230,8 @@ void main() {
       areaPct: 5,
       aspectRatio: 1,
       colors: [
-        ColorSwatch(hex: '#6d422c', catalogColor: 'brown', share: 0.7),
-        ColorSwatch(hex: '#c3a687', catalogColor: 'beige', share: 0.3),
+        MeasuredColor(hex: '#6d422c', catalogColor: 'brown', share: 0.7),
+        MeasuredColor(hex: '#c3a687', catalogColor: 'beige', share: 0.3),
       ],
       materials: [MaterialGuess(name: 'wood', confidence: 0.9), MaterialGuess(name: 'fabric', confidence: 0.4)],
       source: 'gemini',
@@ -239,7 +239,7 @@ void main() {
 
     test('sends the item colours and materials so the backend can nudge the ranking', () async {
       final adapter = FakeAdapter(response);
-      await serviceWith(adapter).matchesFor(withFeatures(extracted));
+      await serviceWith(adapter).matchesFor(withFeatures(extracted), use: FeatureUse.all);
 
       final fields = formFields(adapter.lastRequest!);
       expect(jsonDecode(fields['colors']!), [
@@ -252,12 +252,35 @@ void main() {
       ]);
     });
 
+    test('by default neither colour nor material is sent (both toggles start off)', () async {
+      final adapter = FakeAdapter(response);
+      await serviceWith(adapter).matchesFor(withFeatures(extracted));
+
+      expect(formFields(adapter.lastRequest!).keys, isNot(contains('colors')));
+      expect(formFields(adapter.lastRequest!).keys, isNot(contains('materials')));
+    });
+
+    test('colour and material are sent independently, as switched on', () {
+      final item = withFeatures(extracted);
+
+      expect(BackendProductMatchService.featureFields(item, use: const FeatureUse(colour: true)).keys, ['colors']);
+      expect(BackendProductMatchService.featureFields(item, use: const FeatureUse(material: true)).keys, ['materials']);
+      expect(BackendProductMatchService.featureFields(item, use: FeatureUse.none), isEmpty);
+      expect(BackendProductMatchService.featureFields(item, use: FeatureUse.all).keys, ['colors', 'materials']);
+    });
+
+    test('FeatureUse compares by value', () {
+      expect(const FeatureUse(colour: true), const FeatureUse(colour: true));
+      expect(const FeatureUse(colour: true), isNot(const FeatureUse(material: true)));
+      expect(FeatureUse.none.copyWith(colour: true, material: true), FeatureUse.all);
+    });
+
     test('sends only what was extracted: colours without materials when the model was not asked', () {
       final onlyColours = FurnitureFeatures(
         dominantColors: const [],
         areaPct: 5,
         aspectRatio: 1,
-        colors: [ColorSwatch(hex: '#6d422c', catalogColor: 'brown', share: 1)],
+        colors: [MeasuredColor(hex: '#6d422c', catalogColor: 'brown', share: 1)],
       );
       final fields = BackendProductMatchService.featureFields(withFeatures(onlyColours));
       expect(fields.keys, ['colors']);
@@ -284,8 +307,8 @@ void main() {
         areaPct: 5,
         aspectRatio: 1,
         colors: [
-          ColorSwatch(hex: '#000000', catalogColor: '', share: 0.5),
-          ColorSwatch(hex: '#111111', catalogColor: 'black', share: 0),
+          MeasuredColor(hex: '#000000', catalogColor: '', share: 0.5),
+          MeasuredColor(hex: '#111111', catalogColor: 'black', share: 0),
         ],
       );
       expect(BackendProductMatchService.featureFields(withFeatures(messy)), isEmpty);

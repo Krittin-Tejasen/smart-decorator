@@ -8,12 +8,39 @@ import '../../shared/models/product_match.dart';
 import '../../shared/utils/data_url.dart';
 import 'api_service.dart';
 
+/// Which of an item's extracted features the backend may use to re-rank its
+/// matches. They only reorder results (never remove any), and both are off by
+/// default: there is no evidence yet that they improve the matches.
+class FeatureUse {
+  final bool colour;
+  final bool material;
+
+  const FeatureUse({this.colour = false, this.material = false});
+
+  static const none = FeatureUse();
+  static const all = FeatureUse(colour: true, material: true);
+
+  FeatureUse copyWith({bool? colour, bool? material}) =>
+      FeatureUse(colour: colour ?? this.colour, material: material ?? this.material);
+
+  @override
+  bool operator ==(Object other) =>
+      other is FeatureUse && other.colour == colour && other.material == material;
+
+  @override
+  int get hashCode => Object.hash(colour, material);
+}
+
 /// Finds catalogue products for a piece of furniture detected in a room.
 abstract class ProductMatchService {
   /// The best matches first. Empty when nothing in the catalog is close
   /// enough (the backend drops matches below its similarity threshold) or
   /// nothing fits [price].
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price});
+  Future<List<ProductMatch>> matchesFor(
+    FurnitureItem item, {
+    PriceRange? price,
+    FeatureUse use = FeatureUse.none,
+  });
 }
 
 /// Real matching: POST /match-products (backend/product_matching.py), which
@@ -38,18 +65,20 @@ class BackendProductMatchService implements ProductMatchService {
   }
 
   /// The item's colours and materials as the backend's `colors` / `materials`
-  /// form fields; it uses them to nudge the ranking (never to filter). Nothing
-  /// is sent for a cut-out the model called unusable, or for a feature that
-  /// wasn't extracted.
-  static Map<String, String> featureFields(FurnitureItem item) {
+  /// form fields; it uses them to nudge the ranking (never to filter). Only the
+  /// features switched on in [use] are sent, and nothing for a cut-out the model
+  /// called unusable or for a feature that was not extracted.
+  static Map<String, String> featureFields(FurnitureItem item, {FeatureUse use = FeatureUse.all}) {
     final features = item.features;
     if (!features.usable) return const {};
     final colors = [
-      for (final c in features.colors)
-        if (c.catalogColor.isNotEmpty && c.share > 0) {'catalog_color': c.catalogColor, 'share': c.share},
+      if (use.colour)
+        for (final c in features.colors)
+          if (c.catalogColor.isNotEmpty && c.share > 0) {'catalog_color': c.catalogColor, 'share': c.share},
     ];
     final materials = [
-      for (final m in features.materials) {'name': m.name, 'confidence': m.confidence},
+      if (use.material)
+        for (final m in features.materials) {'name': m.name, 'confidence': m.confidence},
     ];
     return {
       if (colors.isNotEmpty) 'colors': jsonEncode(colors),
@@ -58,7 +87,11 @@ class BackendProductMatchService implements ProductMatchService {
   }
 
   @override
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price}) async {
+  Future<List<ProductMatch>> matchesFor(
+    FurnitureItem item, {
+    PriceRange? price,
+    FeatureUse use = FeatureUse.none,
+  }) async {
     final image = imageFor(item);
     if (image == null) {
       throw StateError('This item has no image to match.');
@@ -69,7 +102,7 @@ class BackendProductMatchService implements ProductMatchService {
       data: FormData.fromMap({
         'label': item.label,
         'top_k': '$count',
-        ...featureFields(item),
+        ...featureFields(item, use: use),
         if (price?.min != null) 'min_price': '${price!.min}',
         if (price?.max != null) 'max_price': '${price!.max}',
         'image': MultipartFile.fromBytes(image, filename: 'item-${item.id}.png'),
@@ -96,7 +129,11 @@ class SampleProductMatchService implements ProductMatchService {
   final int count;
 
   @override
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price}) async {
+  Future<List<ProductMatch>> matchesFor(
+    FurnitureItem item, {
+    PriceRange? price,
+    FeatureUse use = FeatureUse.none,
+  }) async {
     final matches = _sampleMatches(item);
     return price == null ? matches : matches.where((m) => price.contains(m.price)).toList();
   }
