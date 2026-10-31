@@ -20,10 +20,18 @@ class TestScreen extends ConsumerStatefulWidget {
 class _TestScreenState extends ConsumerState<TestScreen> {
   bool _simulateUpload = false; // false = LiDAR mode, true = monocular simulation
   bool _isRunning = false;
+  String _progressMessage = '';
   String? _error;
   List<FurnitureItem> _results = [];
   String? _depthSource;
   String? _savedPath;
+  GenerationCancelToken? _cancelToken;
+
+  @override
+  void dispose() {
+    _cancelToken?.cancel();
+    super.dispose();
+  }
 
   Future<void> _runAnalysis() async {
     final appState = ref.read(appStateProvider);
@@ -33,11 +41,14 @@ class _TestScreenState extends ConsumerState<TestScreen> {
       return;
     }
 
+    final token = GenerationCancelToken();
     setState(() {
       _isRunning = true;
+      _progressMessage = 'Starting…';
       _error = null;
       _results = [];
       _savedPath = null;
+      _cancelToken = token;
     });
 
     try {
@@ -67,18 +78,31 @@ class _TestScreenState extends ConsumerState<TestScreen> {
         directSegment: true,
       );
 
-      final response = await AIGenerationService().generateRoom(request);
+      final response = await AIGenerationService().generateRoomWithProgress(
+        request,
+        cancelToken: token,
+        timeout: const Duration(minutes: 15),
+        onProgress: (p) {
+          if (mounted) setState(() => _progressMessage = p.message.isNotEmpty ? p.message : p.stage);
+        },
+      );
 
       setState(() {
         _results = response.furnitureSegments?.items ?? [];
         _depthSource = response.furnitureSegments?.depthSource;
         _isRunning = false;
+        _progressMessage = '';
+        _cancelToken = null;
       });
     } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _isRunning = false;
-      });
+      if (mounted) {
+        setState(() {
+          _error = e is GenerationCancelled ? 'Cancelled.' : e.toString();
+          _isRunning = false;
+          _progressMessage = '';
+          _cancelToken = null;
+        });
+      }
     }
   }
 
@@ -184,6 +208,19 @@ class _TestScreenState extends ConsumerState<TestScreen> {
               minimumSize: const Size.fromHeight(48),
             ),
           ),
+          if (_isRunning) ...[
+            const SizedBox(height: 8),
+            Text(
+              _progressMessage,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 4),
+            TextButton(
+              onPressed: () => _cancelToken?.cancel(),
+              child: const Text('Cancel'),
+            ),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 12),
             Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
