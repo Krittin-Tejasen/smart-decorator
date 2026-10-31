@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 import segmentation as seg
@@ -88,6 +89,13 @@ class LabelTests(unittest.TestCase):
         self.assertIn("window", seg._VOCAB_SET)
         self.assertTrue(seg._FURNITURE_PROMPT.rstrip().endswith("."))
 
+    def test_every_phrase_is_separated(self):
+        # A missing " . " once glued "cabinet" onto "floor lamp", so DINO was
+        # never asked for either.
+        self.assertIn("cabinet", seg._VOCAB_SET)
+        self.assertIn("floor lamp", seg._VOCAB_SET)
+        self.assertNotIn("cabinetfloor lamp", seg._VOCAB_SET)
+
 
 class DedupeTests(unittest.TestCase):
     @staticmethod
@@ -129,6 +137,76 @@ class DedupeTests(unittest.TestCase):
             ]
         )
         self.assertEqual([d["label"] for d in kept], ["console table"])
+
+    def test_chairs_one_behind_another_survive_when_their_masks_are_apart(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        front = self.det("armchair", 0.41, (0.20, 0.50, 0.45, 0.95))
+        back = self.det("armchair", 0.38, (0.25, 0.45, 0.47, 0.80))
+        front["mask"] = img(_rect_mask(100, 100, 20, 60, 45, 95))
+        back["mask"] = img(_rect_mask(100, 100, 30, 45, 47, 59))
+        self.assertEqual(len(seg.dedupe_detections([front, back])), 2)
+
+    def test_the_same_chair_twice_keeps_the_more_complete_mask(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        partial = self.det("armchair", 0.39, (0.30, 0.17, 0.38, 0.26))
+        whole = self.det("armchair", 0.32, (0.30, 0.17, 0.38, 0.27))
+        partial["mask"] = img(_rect_mask(100, 100, 30, 17, 38, 24))
+        whole["mask"] = img(_rect_mask(100, 100, 30, 17, 38, 27))
+        kept = seg.dedupe_detections([partial, whole])
+        self.assertEqual(len(kept), 1)
+        self.assertIs(kept[0]["mask"], whole["mask"])
+        self.assertEqual(kept[0]["confidence"], 0.39)
+
+    def test_a_bench_that_sam_painted_as_the_bed_base_is_dropped(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.1, 0.3, 0.8, 0.9))
+        base = self.det("bench", 0.31, (0.3, 0.8, 0.75, 0.9))
+        bed["mask"] = img(_rect_mask(100, 100, 10, 30, 80, 90))
+        base["mask"] = img(_rect_mask(100, 100, 30, 80, 75, 90))
+        self.assertEqual(seg.merge_parts_into_hosts([bed, base]), [bed])
+
+    def test_an_armchair_takes_back_its_seat_read_as_an_ottoman(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        chair = self.det("armchair", 0.38, (0.72, 0.65, 0.92, 0.97))
+        seat = self.det("ottoman", 0.36, (0.72, 0.76, 0.86, 0.87))
+        chair["mask"] = img(_rect_mask(100, 100, 72, 65, 92, 75))
+        seat["mask"] = img(_rect_mask(100, 100, 72, 76, 86, 87))
+        kept = seg.merge_parts_into_hosts([chair, seat])
+        self.assertEqual(kept, [chair])
+        self.assertTrue((np.asarray(chair["mask"]) > 127)[80, 80])
+
+    def test_a_footstool_in_front_of_the_armchair_stays(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        chair = self.det("armchair", 0.5, (0.5, 0.4, 0.8, 0.8))
+        stool = self.det("ottoman", 0.5, (0.55, 0.7, 0.75, 0.95))
+        chair["mask"] = img(_rect_mask(100, 100, 50, 40, 80, 80))
+        stool["mask"] = img(_rect_mask(100, 100, 55, 82, 75, 95))
+        self.assertEqual(len(seg.merge_parts_into_hosts([chair, stool])), 2)
+
+    def test_a_real_bench_at_the_foot_of_the_bed_stays(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.1, 0.3, 0.8, 0.8))
+        bench = self.det("bench", 0.5, (0.3, 0.75, 0.7, 0.95))
+        bed["mask"] = img(_rect_mask(100, 100, 10, 30, 80, 80))
+        bench["mask"] = img(_rect_mask(100, 100, 30, 80, 70, 95))
+        self.assertEqual(len(seg.merge_parts_into_hosts([bed, bench])), 2)
+
+    def test_a_mirror_inside_the_bed_box_is_its_headboard(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.1, 0.3, 0.8, 0.9))
+        headboard = self.det("mirror", 0.34, (0.08, 0.3, 0.3, 0.55))
+        bed["mask"] = img(_rect_mask(100, 100, 25, 45, 80, 90))
+        headboard["mask"] = img(_rect_mask(100, 100, 10, 30, 30, 55))
+        self.assertEqual(seg.merge_parts_into_hosts([bed, headboard]), [bed])
+        self.assertTrue((np.asarray(bed["mask"]) > 127)[35, 15])
+
+    def test_a_mirror_above_the_bed_stays(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.1, 0.5, 0.8, 0.9))
+        mirror = self.det("mirror", 0.6, (0.3, 0.1, 0.6, 0.45))
+        bed["mask"] = img(_rect_mask(100, 100, 10, 50, 80, 90))
+        mirror["mask"] = img(_rect_mask(100, 100, 30, 10, 60, 45))
+        self.assertEqual(len(seg.merge_parts_into_hosts([bed, mirror])), 2)
 
     def test_near_identical_boxes_merge_even_across_families(self):
         kept = seg.dedupe_detections(
@@ -215,6 +293,253 @@ class BuildItemTests(unittest.TestCase):
         import base64, io
         crop = Image.open(io.BytesIO(base64.b64decode(item.crop_image.split(",", 1)[1])))
         self.assertLessEqual(max(crop.size), seg._THUMB_PX)
+
+
+def _rect_mask(h, w, x1, y1, x2, y2):
+    import numpy as np
+
+    m = np.zeros((h, w), dtype=bool)
+    m[y1:y2, x1:x2] = True
+    return m
+
+
+class SamMaskTests(unittest.TestCase):
+    """Mask selection and clean-up between SAM 2 and _build_item."""
+
+    def test_pad_box_grows_and_clips_to_the_image(self):
+        self.assertEqual(seg.pad_box([10, 10, 110, 60], 200, 100, 0.1), [0.0, 5.0, 120.0, 65.0])
+        self.assertEqual(seg.pad_box([0, 0, 200, 100], 200, 100, 0.1), [0.0, 0.0, 200.0, 100.0])
+
+    def test_picks_the_whole_piece_when_nearly_as_confident_as_a_part(self):
+        box = [10, 10, 90, 90]
+        part = _rect_mask(100, 100, 30, 30, 60, 60)    # the cushions
+        whole = _rect_mask(100, 100, 12, 12, 88, 88)   # the sofa
+        self.assertEqual(seg.select_best_mask([part, whole], [0.95, 0.88], box), 1)
+
+    def test_keeps_the_part_when_the_whole_is_much_less_likely(self):
+        box = [10, 10, 90, 90]
+        part = _rect_mask(100, 100, 30, 30, 60, 60)
+        whole = _rect_mask(100, 100, 12, 12, 88, 88)
+        self.assertEqual(seg.select_best_mask([part, whole], [0.95, 0.5], box), 0)
+
+    def test_a_mask_spilling_out_of_the_box_is_not_picked(self):
+        box = [40, 40, 60, 60]
+        inside = _rect_mask(100, 100, 42, 42, 58, 58)
+        wall = _rect_mask(100, 100, 0, 0, 100, 100)
+        self.assertEqual(seg.select_best_mask([inside, wall], [0.8, 0.9], box), 0)
+
+    def test_clean_mask_clips_drops_strays_and_fills_pinholes(self):
+        mask = _rect_mask(100, 100, 20, 20, 80, 80)
+        mask[50, 50] = False                     # SAM 2 pin-hole
+        mask[0:5, 0:5] = True                    # blob outside the box
+        mask[22:24, 85:87] = True                # small stray inside the box
+        cleaned = seg.clean_mask(mask, [10, 10, 90, 90])
+        self.assertTrue(cleaned[50, 50])
+        self.assertFalse(cleaned[0:5, 0:5].any())
+        self.assertFalse(cleaned[22:24, 85:87].any())
+        self.assertTrue(cleaned[20:80, 20:80].all())
+
+    def test_clean_mask_keeps_a_big_real_gap(self):
+        mask = _rect_mask(100, 100, 20, 20, 80, 80)
+        mask[35:65, 35:65] = False               # the gap in a chair back
+        cleaned = seg.clean_mask(mask, [10, 10, 90, 90])
+        self.assertFalse(cleaned[50, 50])
+
+    def test_lamp_pixels_leave_the_nightstand(self):
+        nightstand = {"box": (0.2, 0.5, 0.6, 0.9), "mask": _rect_mask(100, 100, 20, 30, 60, 90)}
+        lamp = {"box": (0.3, 0.2, 0.45, 0.6), "mask": _rect_mask(100, 100, 30, 20, 45, 60)}
+        seg.resolve_overlaps([nightstand, lamp])
+        self.assertFalse(nightstand["mask"][40, 35])
+        self.assertTrue(lamp["mask"][40, 35])
+
+    def test_a_small_unlabelled_box_in_front_takes_its_pixels(self):
+        bed = {"box": (0.1, 0.4, 0.9, 0.9), "mask": _rect_mask(100, 100, 10, 40, 90, 90)}
+        pillow = {"box": (0.2, 0.45, 0.4, 0.55), "mask": _rect_mask(100, 100, 20, 45, 40, 55)}
+        seg.resolve_overlaps([bed, pillow])
+        self.assertFalse(bed["mask"][50, 30])
+        self.assertTrue(bed["mask"][70, 60])
+        self.assertTrue(pillow["mask"][50, 30])
+
+    def test_the_piece_in_front_gains_nothing(self):
+        lamp = {"label": "floor lamp", "box": (0.4, 0.1, 0.6, 0.9), "mask": _rect_mask(100, 100, 40, 10, 60, 90)}
+        pot = {"label": "plant pot", "box": (0.35, 0.7, 0.55, 0.9), "mask": _rect_mask(100, 100, 35, 70, 55, 90)}
+        pot_before = pot["mask"].copy()
+        seg.resolve_overlaps([lamp, pot])
+        self.assertTrue((pot["mask"] == pot_before).all())
+        self.assertFalse(lamp["mask"][80, 45])
+        self.assertTrue(lamp["mask"][30, 50])
+
+    def test_a_chair_keeps_its_seat_cushion(self):
+        chair = {"label": "armchair", "box": (0.2, 0.2, 0.8, 0.9), "mask": _rect_mask(100, 100, 20, 20, 80, 90)}
+        seat = {"label": "cushion", "box": (0.3, 0.5, 0.7, 0.65), "mask": _rect_mask(100, 100, 30, 50, 70, 65)}
+        seg.resolve_overlaps([chair, seat])
+        self.assertTrue(chair["mask"][55, 50])
+
+    def test_a_piece_that_loses_most_of_its_mask_is_marked_swallowed(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        lamp = {"label": "floor lamp", "box": (0.4, 0.1, 0.6, 0.5), "mask": img(_rect_mask(100, 100, 40, 10, 60, 50))}
+        shade = {"label": "pendant lamp", "box": (0.4, 0.1, 0.6, 0.3), "mask": img(_rect_mask(100, 100, 40, 10, 60, 30))}
+        sofa = {"label": "sofa", "box": (0.0, 0.5, 1.0, 1.0), "mask": img(_rect_mask(100, 100, 0, 50, 100, 100))}
+        seg._settle_masks([lamp, shade, sofa], 100, 100)
+        self.assertFalse(lamp["swallowed"])
+        self.assertFalse(sofa["swallowed"])
+        lamp2 = {"label": "floor lamp", "box": (0.4, 0.1, 0.6, 0.5), "mask": img(_rect_mask(100, 100, 40, 10, 60, 50))}
+        vase = {"label": "vase", "box": (0.45, 0.2, 0.55, 0.45), "mask": img(_rect_mask(100, 100, 40, 12, 60, 50))}
+        seg._settle_masks([lamp2, vase], 100, 100)
+        self.assertTrue(lamp2["swallowed"])
+
+    def test_a_duvet_sized_pillow_box_is_not_cut_out_of_the_bed(self):
+        bed = {"label": "bed", "box": (0.0, 0.3, 0.6, 0.9), "mask": _rect_mask(100, 100, 0, 30, 60, 90)}
+        fold = {"label": "cushion", "box": (0.25, 0.4, 0.45, 0.8), "mask": _rect_mask(100, 100, 25, 40, 45, 80)}
+        seg.resolve_overlaps([bed, fold])
+        self.assertTrue(bed["mask"][60, 35])
+
+    def test_a_duvet_mask_as_big_as_the_bed_does_not_replace_the_bed(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = {"label": "bed", "confidence": 0.8, "box": (0.3, 0.4, 0.7, 0.8), "mask": img(_rect_mask(100, 100, 30, 40, 70, 80))}
+        duvet = {"label": "blanket", "confidence": 0.33, "box": (0.3, 0.55, 0.7, 0.75), "mask": img(_rect_mask(100, 100, 30, 40, 70, 81))}
+        furniture, _ = seg.select_detections([bed, duvet], [bed["mask"], duvet["mask"]], 100, 100)
+        self.assertEqual([d["label"] for d in furniture], ["bed"])
+
+    def test_a_bed_deduped_against_its_headboard_still_gets_the_duvet(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        # SAM 2 painted only the headboard for the bed box; the headboard box
+        # got a slightly bigger mask of the same thing.
+        bed = {"label": "bed", "confidence": 0.77, "box": (0.3, 0.37, 0.7, 0.6), "mask": img(_rect_mask(100, 100, 38, 37, 62, 44))}
+        head = {"label": "headboard", "confidence": 0.54, "box": (0.38, 0.36, 0.62, 0.44), "mask": img(_rect_mask(100, 100, 38, 36, 62, 44))}
+        duvet = {"label": "blanket", "confidence": 0.32, "box": (0.31, 0.43, 0.69, 0.52), "mask": img(_rect_mask(100, 100, 31, 43, 69, 52))}
+        furniture, mask_only = seg.select_detections(
+            [bed, head, duvet], [bed["mask"], head["mask"], duvet["mask"]], 100, 100
+        )
+        self.assertEqual([d["label"] for d in furniture], ["bed"])
+        self.assertEqual(mask_only, [])
+        self.assertTrue((np.asarray(furniture[0]["mask"]) > 127)[48, 50])
+
+    def test_a_four_poster_reported_twice_is_one_bed(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        frame = {"label": "bed", "confidence": 0.45, "box": (0.3, 0.2, 0.7, 0.8), "mask": img(_rect_mask(100, 100, 30, 20, 32, 80))}
+        mattress = {"label": "bed", "confidence": 0.53, "box": (0.31, 0.5, 0.69, 0.79), "mask": img(_rect_mask(100, 100, 33, 50, 68, 79))}
+        furniture, _ = seg.select_detections([frame, mattress], [frame["mask"], mattress["mask"]], 100, 100)
+        self.assertEqual(len(furniture), 1)
+        merged = np.asarray(furniture[0]["mask"]) > 127
+        self.assertTrue(merged[60, 31] and merged[60, 50])
+
+    def test_the_garden_chair_seen_through_the_doorway_is_dropped(self):
+        doorway = (0.15, 0.27, 0.30, 0.74)
+        self.assertTrue(seg.seen_through_opening((0.22, 0.57, 0.30, 0.70), [doorway]))
+        # A chair in front of the door reaches below its sill.
+        self.assertFalse(seg.seen_through_opening((0.18, 0.55, 0.28, 0.90), [doorway]))
+
+    def test_glass_walls_and_bed_frames_are_not_doorways(self):
+        doorway = (0.15, 0.27, 0.30, 0.74)
+        glass_wall = (0.80, 0.0, 1.0, 0.96)
+        four_poster = (0.33, 0.23, 0.68, 0.78)
+        bed_box = (0.326, 0.236, 0.679, 0.779)
+        self.assertEqual(seg.real_openings([doorway, glass_wall, four_poster], [bed_box]), [doorway])
+
+    def test_tables_beside_the_bed_are_nightstands(self):
+        bed = {"label": "bed", "box": (0.28, 0.50, 0.73, 0.82)}
+        left = {"label": "console table", "box": (0.277, 0.575, 0.373, 0.688)}
+        right = {"label": "desk", "box": (0.633, 0.576, 0.728, 0.689)}
+        bench = {"label": "side table", "box": (0.426, 0.684, 0.586, 0.93)}     # at the foot, below the bed
+        sideboard = {"label": "dresser", "box": (0.756, 0.564, 0.89, 0.726)}    # too big
+        far = {"label": "side table", "box": (0.031, 0.631, 0.15, 0.824)}       # by the chaise
+        dets = [bed, left, right, bench, sideboard, far]
+        seg.relabel_bedside_tables(dets)
+        self.assertEqual([d["label"] for d in dets],
+                         ["bed", "nightstand", "nightstand", "side table", "dresser", "side table"])
+
+    def test_clip_moves_a_lone_armchair_off_sofa_when_sure(self):
+        cands = seg.clip_candidates("sofa")
+        probs = [0.01 if c != "armchair" else 0.97 for c in cands]
+        self.assertEqual(seg.clip_verdict("sofa", cands, probs), "armchair")
+
+    def test_clip_does_not_shuffle_names_inside_a_product_type(self):
+        cands = seg.clip_candidates("console table")
+        probs = [0.9 if c == "desk" else 0.02 for c in cands]
+        self.assertEqual(seg.clip_verdict("console table", cands, probs), "console table")
+
+    def test_clip_needs_to_be_far_more_sure_than_of_dinos_label(self):
+        cands = seg.clip_candidates("chandelier")
+        probs = [0.62 if c == "decoration" else (0.2 if c == "chandelier" else 0.01) for c in cands]
+        self.assertEqual(seg.clip_verdict("chandelier", cands, probs), "chandelier")
+
+    def test_clip_leaves_labels_without_known_swaps_alone(self):
+        for label in ("nightstand", "bed", "rug", "desk", "artwork"):
+            self.assertIsNone(seg.clip_candidates(label))
+
+    def test_word_pieces_are_rejoined(self):
+        self.assertEqual(seg.canonicalize_label("##board"), "headboard")
+        self.assertEqual(seg.canonicalize_label("head ##board"), "headboard")
+        self.assertEqual(seg.canonicalize_label("plant"), "plant pot")
+        self.assertEqual(seg.canonicalize_label("doorway"), "doorway")
+
+    def test_blanket_is_never_a_card(self):
+        self.assertFalse(seg.is_furniture_label("blanket"))
+        self.assertTrue(seg.is_candidate_label("blanket"))
+        self.assertFalse(seg.is_candidate_label("door"))
+
+    def test_a_blanket_on_the_bed_joins_the_bed(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = {"label": "bed", "confidence": 0.8, "box": (0.1, 0.3, 0.9, 0.9), "mask": img(_rect_mask(100, 100, 10, 30, 60, 90))}
+        duvet = {"label": "blanket", "confidence": 0.37, "box": (0.4, 0.5, 0.88, 0.85), "mask": img(_rect_mask(100, 100, 40, 50, 88, 85))}
+        furniture, mask_only = seg.select_detections([bed, duvet], [bed["mask"], duvet["mask"]], 100, 100)
+        self.assertEqual([d["label"] for d in furniture], ["bed"])
+        self.assertEqual(mask_only, [])
+        self.assertTrue((np.asarray(furniture[0]["mask"]) > 127)[70, 80])
+
+    def test_a_bench_at_the_foot_keeps_its_pixels_from_the_bed(self):
+        bed = {"label": "bed", "box": (0.30, 0.49, 0.71, 0.80), "mask": _rect_mask(100, 100, 30, 49, 71, 85)}
+        bench = {"label": "bench", "box": (0.33, 0.67, 0.67, 0.85), "mask": _rect_mask(100, 100, 33, 67, 67, 85)}
+        seg.resolve_overlaps([bed, bench])
+        self.assertFalse(bed["mask"][80, 50])
+        self.assertTrue(bench["mask"][80, 50])
+
+    def test_pillows_and_throws_join_the_sofa(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        sofa = {"label": "sofa", "confidence": 0.7, "box": (0.1, 0.4, 0.9, 0.8), "mask": img(_rect_mask(100, 100, 10, 50, 90, 80))}
+        throw = {"label": "blanket", "confidence": 0.4, "box": (0.6, 0.45, 0.75, 0.7), "mask": img(_rect_mask(100, 100, 60, 45, 75, 70))}
+        pillow = {"label": "pillow", "confidence": 0.5, "box": (0.2, 0.42, 0.35, 0.55), "mask": img(_rect_mask(100, 100, 20, 42, 35, 55))}
+        stray = {"label": "pillow", "confidence": 0.4, "box": (0.0, 0.9, 0.05, 0.98), "mask": img(_rect_mask(100, 100, 0, 90, 5, 98))}
+        dets = [sofa, throw, pillow, stray]
+        furniture, mask_only = seg.select_detections(dets, [d["mask"] for d in dets], 100, 100)
+        self.assertEqual([d["label"] for d in furniture], ["sofa"])
+        self.assertEqual(mask_only, [])
+        seg._settle_masks(furniture, 100, 100)
+        merged = np.asarray(furniture[0]["mask"]) > 127
+        self.assertTrue(merged[46, 65] and merged[44, 25])
+        self.assertFalse(merged[94, 2])
+
+    def test_pillows_are_mask_only(self):
+        self.assertTrue(seg.is_mask_only_label("cushion"))
+        self.assertFalse(seg.is_furniture_label("throw pillow"))
+        self.assertTrue(seg.is_furniture_label("sofa"))
+
+    def test_clean_mask_leaves_shelf_openings_open_without_hole_filling(self):
+        shelf = _rect_mask(100, 100, 20, 20, 80, 80)
+        shelf[25:35, 25:75] = False              # one opening between shelves
+        cleaned = seg.clean_mask(shelf, [10, 10, 90, 90], fill_holes=False)
+        self.assertFalse(cleaned[30, 50])
+
+    def test_the_bed_keeps_its_base_where_the_rug_runs_under_it(self):
+        bed = {"label": "bed", "box": (0.1, 0.3, 0.6, 0.8), "mask": _rect_mask(100, 100, 10, 30, 60, 80)}
+        rug = {"label": "rug", "box": (0.15, 0.7, 0.7, 0.95), "mask": _rect_mask(100, 100, 15, 70, 70, 95)}
+        seg.resolve_overlaps([bed, rug])
+        self.assertTrue(bed["mask"][75, 30])
+        self.assertFalse(rug["mask"][75, 30])
+
+    def test_similar_sized_boxes_keep_their_own_pixels(self):
+        table = {"label": "dining table", "box": (0.2, 0.4, 0.8, 0.8), "mask": _rect_mask(100, 100, 20, 40, 80, 80)}
+        sideboard = {"label": "bookshelf", "box": (0.3, 0.3, 0.8, 0.6), "mask": _rect_mask(100, 100, 30, 30, 80, 60)}
+        seg.resolve_overlaps([table, sideboard])
+        self.assertTrue(table["mask"][50, 50])
+        self.assertTrue(sideboard["mask"][50, 50])
+
+    def test_settle_masks_grows_the_box_to_cover_the_mask(self):
+        mask = Image.fromarray(_rect_mask(100, 100, 18, 20, 80, 95).astype("uint8") * 255, mode="L")
+        dets = [{"box": (0.2, 0.2, 0.8, 0.9), "mask": mask}]
+        seg._settle_masks(dets, 100, 100)
+        self.assertEqual(dets[0]["box"], (0.18, 0.2, 0.8, 0.95))
 
 
 if __name__ == "__main__":
