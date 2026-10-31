@@ -126,6 +126,11 @@ def main() -> None:
     groups = build_groups(rows)
     print(f"{len(rows)} rows -> {len(groups)} distinct products (by photo).")
 
+    # The file (if any) carried over from and resumed against — resolved once,
+    # *before* out_path is created below, so it can never resolve to out_path
+    # itself (a bug that silently dropped every carried-over row the first
+    # time this ran: out_path existing, empty, as the "latest" file).
+    source: Path | None = None
     keys = sorted(groups)
     if args.sample:
         random.Random(args.seed).shuffle(keys)
@@ -135,7 +140,8 @@ def main() -> None:
         resume_path = Path(args.resume_from) if args.resume_from else None
         if resume_path and not resume_path.is_absolute():
             resume_path = BACKUP_DIR / resume_path
-        skip = already_done(resume_path or _latest_output())
+        source = resume_path or _latest_output()
+        skip = already_done(source)
         if skip:
             print(f"Resuming: {len(skip)} products already measured in a previous run, skipping those.")
 
@@ -151,8 +157,7 @@ def main() -> None:
     # is always a complete, growing record (not just this invocation's slice)
     carried = 0
     with out_path.open("w", encoding="utf-8") as out:
-        source = (args.resume_from and (Path(args.resume_from) if Path(args.resume_from).is_absolute() else BACKUP_DIR / args.resume_from)) or _latest_output()
-        if not args.sample and source and source.exists():
+        if source and source.exists():
             with source.open(encoding="utf-8") as prev:
                 for line in prev:
                     if line.strip():
@@ -214,13 +219,15 @@ def main() -> None:
                     out.flush()
                     print(f"  {n}/{len(todo)} ({time.monotonic() - t0:.0f}s)...")
 
-    measured = len(todo) - (len(todo) - (agree + disagree + no_old_colour + low_conf))
     total_considered = agree + disagree + no_old_colour + low_conf
-    print(f"\nDone: {total_considered} measured this run -> {out_path} ({out_path.stat().st_size / 1e6:.1f} MB)")
-    print(f"  low_confidence (kept the old colour): {low_conf}")
+    with out_path.open(encoding="utf-8") as f:
+        total_in_file = sum(1 for line in f if line.strip())
+    print(f"\nDone: {total_considered} measured this run, {carried} carried over from {source.name if source else '(none)'}")
+    print(f"  -> {out_path} now has {total_in_file} product(s) total ({out_path.stat().st_size / 1e6:.1f} MB)")
+    print(f"  low_confidence this run (kept the old colour): {low_conf}")
     if agree + disagree:
-        print(f"  measured top colour agrees with the catalog's color_extracted: {agree}/{agree + disagree} ({agree/(agree+disagree):.0%})")
-    print(f"  measured but the catalog had no color_extracted at all: {no_old_colour}")
+        print(f"  this run's measured top colour agrees with the catalog's color_extracted: {agree}/{agree + disagree} ({agree/(agree+disagree):.0%})")
+    print(f"  measured this run but the catalog had no color_extracted at all: {no_old_colour}")
 
 
 def _latest_output() -> Path | None:
