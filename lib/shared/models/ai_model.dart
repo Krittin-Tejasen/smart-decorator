@@ -1,7 +1,7 @@
 /// One entry in the AI-model picker. `providerValue` is what actually gets
 /// sent to the backend's `provider` form field on /generate-room - it maps
 /// straight onto the values generation.py's AI_IMAGE_PROVIDER already
-/// understands ("mock" / "gemini" / "replicate"), so no backend-side
+/// understands ("mock" / "gemini" / "replicate" / "openrouter"), so no backend-side
 /// mapping is needed. "FLUX.2 klein" is really Replicate under the hood
 /// (see backend/.env REPLICATE_MODEL) - the picker just gives it a
 /// friendlier name than the raw provider string.
@@ -47,5 +47,11 @@ class AiModel {
     subtitle: 'Faster & cheaper open-source model - ~1 THB/image',
   );
 
-  static const all = [serverDefault, mock, gemini, flux];
+  static const muse = AiModel(
+    providerValue: 'openrouter',
+    title: 'Muse Image',
+    subtitle: 'Meta image model via OpenRouter - ~0.35 THB/image',
+  );
+
+  static const all = [serverDefault, mock, gemini, flux, muse];
 }
