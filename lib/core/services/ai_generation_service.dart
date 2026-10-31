@@ -90,6 +90,9 @@ class AIGenerationService {
         'depth_max_m': request.depthMaxMeters.toString(),
       if (request.floorPlanPoints != null)
         'floor_plan_points': jsonEncode(request.floorPlanPoints),
+      if (request.roomHeightMeters != null)
+        'room_height_m': request.roomHeightMeters.toString(),
+      if (request.directSegment) 'direct_segment': 'true',
     });
   }
 

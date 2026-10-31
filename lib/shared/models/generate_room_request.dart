@@ -32,6 +32,10 @@ class GenerateRoomRequest {
   /// depth estimation to calibrate furniture sizes.
   final double? roomHeightMeters;
 
+  /// Skip AI generation and segment the source photo directly.
+  /// Used by the size-extraction test screen.
+  final bool directSegment;
+
   GenerateRoomRequest({
     required this.roomType,
     required this.style,
@@ -45,6 +49,7 @@ class GenerateRoomRequest {
     this.depthMaxMeters,
     this.floorPlanPoints,
     this.roomHeightMeters,
+    this.directSegment = false,
   });
 
   /// True when there's enough spatial data to ask the backend for furniture
@@ -77,6 +82,7 @@ class GenerateRoomRequest {
       if (depthMaxMeters != null) 'depth_max_m': depthMaxMeters,
       if (floorPlanPoints != null) 'floor_plan_points': floorPlanPoints,
       if (roomHeightMeters != null) 'room_height_m': roomHeightMeters,
+      if (directSegment) 'direct_segment': 'true',
     };
   }
 }

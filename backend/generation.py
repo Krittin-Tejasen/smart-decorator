@@ -649,30 +649,21 @@ async def generate_room(
     image: UploadFile = File(...),
     segment: bool = Form(False),
     provider: str | None = Form(None),
-    # Spatial data for furniture-size estimation — all optional. Only present
-    # when the app's uploaded photo came from a LiDAR scan session. See
-    # spatial_measurement.py. camera_intrinsics/camera_extrinsics/
-    # floor_plan_points are JSON-encoded arrays/objects as strings.
     camera_intrinsics: str | None = Form(None),
     camera_extrinsics: str | None = Form(None),
     depth_map_png: str | None = Form(None),
     depth_min_m: float | None = Form(None),
     depth_max_m: float | None = Form(None),
     floor_plan_points: str | None = Form(None),
-    # Floor-plan-only path: user uploaded a photo after scanning, without an
-    # in-session AR capture. No depth map is provided; the backend runs
-    # monocular depth estimation instead.
     room_height_m: float | None = Form(None),
+    # Skip AI generation and segment the source photo directly (test/dev use).
+    direct_segment: bool = Form(False),
 ):
     image_bytes = await image.read()
     mime_type = image.content_type or "image/png"
 
     return await run_generate_room(
-        room_type,
-        style,
-        color,
-        image_bytes,
-        mime_type,
+        room_type, style, color, image_bytes, mime_type,
         segment=segment,
         provider=provider,
         camera_intrinsics=camera_intrinsics,
@@ -682,6 +673,7 @@ async def generate_room(
         depth_max_m=depth_max_m,
         floor_plan_points=floor_plan_points,
         room_height_m=room_height_m,
+        direct_segment=direct_segment,
     )
 
 
@@ -705,6 +697,7 @@ async def run_generate_room(
     depth_max_m: float | None = None,
     floor_plan_points: str | None = None,
     room_height_m: float | None = None,
+    direct_segment: bool = False,
     report: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """The whole generation pipeline: compose prompt -> generate -> critic
@@ -721,74 +714,78 @@ async def run_generate_room(
 
     source_image = _open_source_image(image_bytes)
 
-    progress("compose", "Analyzing your room and planning the design", 0.05)
-    try:
-        style_paragraph = await compose_design_prompt(
-            room_type, style, color, image_bytes, mime_type
-        )
-        # The composer only writes the style/furniture description - the hard
-        # "don't cover the doors/windows/outlets" constraint always gets
-        # appended here rather than trusted to the composer's output.
-        prompt = f"{style_paragraph}\n\n{_STRUCTURE_PRESERVATION_CLAUSE}"
-    except Exception as exc:
-        print(f"compose_design_prompt failed, falling back to static prompt: {exc}")
-        prompt = build_static_fallback_prompt(room_type, style, color)
+    # ── Direct-segment mode: skip AI generation entirely ─────────────────────
+    # Used by the test screen to measure furniture sizes on the source photo
+    # without generating a redesign. Encodes the source image as the
+    # "generated_image" so the rest of the pipeline (segmentation + sizing)
+    # runs unchanged.
+    if direct_segment:
+        from io import BytesIO as _BytesIO
+        buf = _BytesIO()
+        source_image.save(buf, format="JPEG", quality=90)
+        generated_image = f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
+        response: dict[str, Any] = {"generated_image": generated_image, "products": []}
+        segment = True  # always segment in direct mode
+        # fall through to the segmentation block below
+    else:
+        response = {}
 
-    # Client may pick a provider per-request (e.g. a model-selector UI);
-    # falls back to the server's env default when not specified.
-    provider = (provider or os.getenv("AI_IMAGE_PROVIDER", "gemini")).lower()
-
-    async def run_provider() -> str:
-        if provider == "mock":
-            return await generate_with_mock(room_type, style, color, source_image)
-        if provider == "replicate":
-            return await generate_with_replicate(prompt, image_bytes, mime_type)
-        if provider == "gemini":
-            return await generate_with_gemini(prompt, image_bytes, mime_type)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unsupported AI_IMAGE_PROVIDER: {provider}",
-        )
-
-    progress("generate", "Generating your new room design", 0.15)
-    generated_image = await run_provider()
-
-    # Critic Agent: the mock provider just watermarks the original photo, so
-    # there's nothing to judge. Real providers get up to CRITIC_MAX_RETRIES
-    # automatic retries if the attempt doesn't actually match what was
-    # asked for, comparing against the original photo so it can specifically
-    # catch a covered/missing door/window/outlet, a hallucinated new one, a
-    # changed wall material, or a still-empty room - not just a wrong room
-    # type/style. Each retry re-checks with the critic rather than assuming
-    # the fix worked, since one correction pass doesn't always stick.
-    if provider != "mock":
-        progress("critic", "Checking doors, windows and outlets are still in place", 0.65)
-        gen_bytes, gen_mime = decode_data_url(generated_image)
-        passed, verdict = await critique_generated_image(
-            image_bytes, mime_type, gen_bytes, gen_mime, room_type, style, color
-        )
-        retries_used = 0
-        while not passed and retries_used < CRITIC_MAX_RETRIES:
-            retries_used += 1
-            print(
-                f"Critic Agent rejected attempt {retries_used} "
-                f"(of {CRITIC_MAX_RETRIES} retries allowed): {verdict}"
+    if not direct_segment:
+        progress("compose", "Analyzing your room and planning the design", 0.05)
+        try:
+            style_paragraph = await compose_design_prompt(
+                room_type, style, color, image_bytes, mime_type
             )
-            prompt = f"{prompt}{critic_retry_reminder(verdict)}"
-            retry_fraction = min(0.85, 0.65 + 0.05 * retries_used)
-            progress("retry", f"Refining the design (attempt {retries_used + 1})", retry_fraction)
-            generated_image = await run_provider()
-            progress("critic", "Re-checking the refined design", retry_fraction + 0.02)
+            prompt = f"{style_paragraph}\n\n{_STRUCTURE_PRESERVATION_CLAUSE}"
+        except Exception as exc:
+            print(f"compose_design_prompt failed, falling back to static prompt: {exc}")
+            prompt = build_static_fallback_prompt(room_type, style, color)
+
+        provider = (provider or os.getenv("AI_IMAGE_PROVIDER", "gemini")).lower()
+
+        async def run_provider() -> str:
+            if provider == "mock":
+                return await generate_with_mock(room_type, style, color, source_image)
+            if provider == "replicate":
+                return await generate_with_replicate(prompt, image_bytes, mime_type)
+            if provider == "gemini":
+                return await generate_with_gemini(prompt, image_bytes, mime_type)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Unsupported AI_IMAGE_PROVIDER: {provider}",
+            )
+
+        progress("generate", "Generating your new room design", 0.15)
+        generated_image = await run_provider()
+
+        if provider != "mock":
+            progress("critic", "Checking doors, windows and outlets are still in place", 0.65)
             gen_bytes, gen_mime = decode_data_url(generated_image)
             passed, verdict = await critique_generated_image(
                 image_bytes, mime_type, gen_bytes, gen_mime, room_type, style, color
             )
+            retries_used = 0
+            while not passed and retries_used < CRITIC_MAX_RETRIES:
+                retries_used += 1
+                print(
+                    f"Critic Agent rejected attempt {retries_used} "
+                    f"(of {CRITIC_MAX_RETRIES} retries allowed): {verdict}"
+                )
+                prompt = f"{prompt}{critic_retry_reminder(verdict)}"
+                retry_fraction = min(0.85, 0.65 + 0.05 * retries_used)
+                progress("retry", f"Refining the design (attempt {retries_used + 1})", retry_fraction)
+                generated_image = await run_provider()
+                progress("critic", "Re-checking the refined design", retry_fraction + 0.02)
+                gen_bytes, gen_mime = decode_data_url(generated_image)
+                passed, verdict = await critique_generated_image(
+                    image_bytes, mime_type, gen_bytes, gen_mime, room_type, style, color
+                )
 
-    progress("match", "Finding matching products", 0.90)
-    response: dict[str, Any] = {
-        "generated_image": generated_image,
-        "products": mock_products(),
-    }
+        progress("match", "Finding matching products", 0.90)
+        response = {
+            "generated_image": generated_image,
+            "products": mock_products(),
+        }
 
     if segment:
         progress("segment", "Detecting furniture in the design", 0.93)
@@ -965,11 +962,11 @@ async def start_generate_room_job(
     depth_max_m: float | None = Form(None),
     floor_plan_points: str | None = Form(None),
     room_height_m: float | None = Form(None),
+    direct_segment: bool = Form(False),
 ):
     image_bytes = await image.read()
     mime_type = image.content_type or "image/png"
 
-    # Reject an unreadable upload right away rather than as a failed job.
     _open_source_image(image_bytes)
 
     now = time.time()
@@ -993,6 +990,7 @@ async def start_generate_room_job(
             depth_max_m=depth_max_m,
             floor_plan_points=floor_plan_points,
             room_height_m=room_height_m,
+            direct_segment=direct_segment,
         )
     )
     _jobs[job.id] = job

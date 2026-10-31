@@ -886,31 +886,35 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   width: double.infinity,
                   height: 56,
 
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: canGenerate
-                          ? AppColors.brass
-                          : AppColors.brass.withValues(alpha: 0.45),
-                      foregroundColor: AppColors.ink,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-
-                    onPressed: canGenerate
-                        ? () {
-                            debugPrint('Generate Design Tapped');
-                            context.go('/processing');
-                            // context.go('/test');
-                          }
+                  child: GestureDetector(
+                    onLongPress: canGenerate
+                        ? () => context.push('/test')
                         : null,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: canGenerate
+                            ? AppColors.brass
+                            : AppColors.brass.withValues(alpha: 0.45),
+                        foregroundColor: AppColors.ink,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
 
-                    child: const Text(
-                      'Generate Design',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                      onPressed: canGenerate
+                          ? () {
+                              debugPrint('Generate Design Tapped');
+                              context.go('/processing');
+                            }
+                          : null,
+
+                      child: const Text(
+                        'Generate Design',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                   ),
