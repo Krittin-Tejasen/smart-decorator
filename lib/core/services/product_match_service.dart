@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -7,12 +8,41 @@ import '../../shared/models/product_match.dart';
 import '../../shared/utils/data_url.dart';
 import 'api_service.dart';
 
+/// Which of an item's extracted features the matches are filtered by (the two
+/// switches on the matches page). A filter hides every product that does not
+/// match, so it can leave nothing; both are off by default.
+class MatchFilter {
+  final bool colour;
+  final bool material;
+
+  const MatchFilter({this.colour = false, this.material = false});
+
+  static const none = MatchFilter();
+  static const all = MatchFilter(colour: true, material: true);
+
+  bool get isOn => colour || material;
+
+  MatchFilter copyWith({bool? colour, bool? material}) =>
+      MatchFilter(colour: colour ?? this.colour, material: material ?? this.material);
+
+  @override
+  bool operator ==(Object other) =>
+      other is MatchFilter && other.colour == colour && other.material == material;
+
+  @override
+  int get hashCode => Object.hash(colour, material);
+}
+
 /// Finds catalogue products for a piece of furniture detected in a room.
 abstract class ProductMatchService {
   /// The best matches first. Empty when nothing in the catalog is close
   /// enough (the backend drops matches below its similarity threshold) or
   /// nothing fits [price].
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price});
+  Future<List<ProductMatch>> matchesFor(
+    FurnitureItem item, {
+    PriceRange? price,
+    MatchFilter filter = MatchFilter.none,
+  });
 }
 
 /// Real matching: POST /match-products (backend/product_matching.py), which
@@ -36,8 +66,35 @@ class BackendProductMatchService implements ProductMatchService {
     return decodeDataUrl(item.cropImage);
   }
 
+  /// The item's colours and materials as the backend's `colors` / `materials`
+  /// form fields; when present, the backend keeps only products with a matching
+  /// colour / material. Only the features switched on in [filter] are sent, and
+  /// nothing for a cut-out the model called unusable or for a feature that was
+  /// not extracted.
+  static Map<String, String> featureFields(FurnitureItem item, {MatchFilter filter = MatchFilter.all}) {
+    final features = item.features;
+    if (!features.usable) return const {};
+    final colors = [
+      if (filter.colour)
+        for (final c in features.colors)
+          if (c.catalogColor.isNotEmpty && c.share > 0) {'catalog_color': c.catalogColor, 'share': c.share},
+    ];
+    final materials = [
+      if (filter.material)
+        for (final m in features.materials) {'name': m.name, 'confidence': m.confidence},
+    ];
+    return {
+      if (colors.isNotEmpty) 'colors': jsonEncode(colors),
+      if (materials.isNotEmpty) 'materials': jsonEncode(materials),
+    };
+  }
+
   @override
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price}) async {
+  Future<List<ProductMatch>> matchesFor(
+    FurnitureItem item, {
+    PriceRange? price,
+    MatchFilter filter = MatchFilter.none,
+  }) async {
     final image = imageFor(item);
     if (image == null) {
       throw StateError('This item has no image to match.');
@@ -48,6 +105,7 @@ class BackendProductMatchService implements ProductMatchService {
       data: FormData.fromMap({
         'label': item.label,
         'top_k': '$count',
+        ...featureFields(item, filter: filter),
         if (price?.min != null) 'min_price': '${price!.min}',
         if (price?.max != null) 'max_price': '${price!.max}',
         'image': MultipartFile.fromBytes(image, filename: 'item-${item.id}.png'),
@@ -74,7 +132,11 @@ class SampleProductMatchService implements ProductMatchService {
   final int count;
 
   @override
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price}) async {
+  Future<List<ProductMatch>> matchesFor(
+    FurnitureItem item, {
+    PriceRange? price,
+    MatchFilter filter = MatchFilter.none,
+  }) async {
     final matches = _sampleMatches(item);
     return price == null ? matches : matches.where((m) => price.contains(m.price)).toList();
   }
