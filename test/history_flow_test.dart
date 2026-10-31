@@ -6,10 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:smart_decorator/core/services/design_repository.dart';
+import 'package:smart_decorator/core/services/product_match_service.dart';
 import 'package:smart_decorator/core/services/segmentation_service.dart';
 import 'package:smart_decorator/features/history/presentation/history_screen.dart';
 import 'package:smart_decorator/features/history/providers/history_providers.dart';
 import 'package:smart_decorator/features/results/presentation/furniture_matches_screen.dart';
+import 'package:smart_decorator/features/results/providers/furniture_matches_provider.dart';
 import 'package:smart_decorator/routes/app_router.dart';
 import 'package:smart_decorator/shared/models/design_labels.dart';
 import 'package:smart_decorator/shared/models/furniture_item.dart';
@@ -69,6 +71,7 @@ Widget appWith(
   return ProviderScope(
     overrides: [
       designRepositoryProvider.overrideWithValue(repo),
+      productMatchServiceProvider.overrideWithValue(const SampleProductMatchService()),
       if (segmentation != null) segmentationServiceProvider.overrideWithValue(segmentation),
       imageBytesLoaderProvider.overrideWithValue(loader ?? (url) async => Uint8List.fromList([1, 2, 3])),
     ],

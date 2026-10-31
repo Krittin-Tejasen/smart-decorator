@@ -1,15 +1,35 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../shared/models/product_match.dart';
 
+/// Opens a product's shop page outside the app. Replaceable in tests.
+typedef OpenProductLink = Future<bool> Function(Uri url);
+
+Future<bool> _openInBrowser(Uri url) => launchUrl(url, mode: LaunchMode.externalApplication);
+
 /// One proposed product for a detected piece of furniture: photo (or a
-/// category icon when there is none), name, price, size, colour/material and
-/// how closely it matches.
+/// category icon when there is none), name, price, size, colour/material, how
+/// closely it matches, and a link to buy it.
 class ProductMatchCard extends StatelessWidget {
   final ProductMatch product;
+  final OpenProductLink openLink;
 
-  const ProductMatchCard({super.key, required this.product});
+  const ProductMatchCard({super.key, required this.product, this.openLink = _openInBrowser});
+
+  Uri? get _shopUrl {
+    final uri = Uri.tryParse(product.url ?? '');
+    return uri != null && uri.hasScheme && uri.host.isNotEmpty ? uri : null;
+  }
+
+  Future<void> _open(BuildContext context, Uri url) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final opened = await openLink(url).catchError((Object _) => false);
+    if (!opened) {
+      messenger?.showSnackBar(const SnackBar(content: Text('Could not open the store page')));
+    }
+  }
 
   IconData get _icon {
     switch (product.category) {
@@ -66,6 +86,7 @@ class ProductMatchCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final shopUrl = _shopUrl;
     final dimensions = product.dimensionsLabel;
     final details = [
       if (product.colorName != null) product.colorName!,
@@ -148,10 +169,13 @@ class ProductMatchCard extends StatelessWidget {
                       foreground: AppColors.brassDeep,
                     ),
                     _Chip(
-                      label: product.inStock ? 'In stock' : 'Out of stock',
-                      background: AppColors.sageTint,
-                      foreground: AppColors.sageDeep,
+                      label: product.confidenceLabel,
+                      background: product.confidence == 'high' ? AppColors.sageTint : AppColors.sandTint,
+                      foreground: product.confidence == 'high' ? AppColors.sageDeep : AppColors.muted,
                     ),
+                    // No stock chip: the catalogue's in_stock flag is often wrong
+                    // (shows "out of stock" for products still on sale), so the
+                    // shop page is the place to check.
                     if (product.isSample)
                       const _Chip(
                         label: 'Sample',
@@ -160,6 +184,23 @@ class ProductMatchCard extends StatelessWidget {
                       ),
                   ],
                 ),
+
+                if (shopUrl != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      key: const ValueKey('product-store-link'),
+                      onPressed: () => _open(context, shopUrl),
+                      icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                      label: Text('View at ${_storeName(shopUrl)}'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.sageDeep,
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 32),
+                        textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -167,6 +208,12 @@ class ProductMatchCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "IKEA" for ikea.com links, otherwise the site's host.
+String _storeName(Uri url) {
+  final host = url.host.replaceFirst(RegExp(r'^www\.'), '');
+  return host.startsWith('ikea.') ? 'IKEA' : host;
 }
 
 class _Chip extends StatelessWidget {
