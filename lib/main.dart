@@ -18,8 +18,9 @@ Future<void> main() async {
   );
 
   // Everyone is an anonymous user (no login screen): this is what makes saved
-  // rooms private to a person and countable against the 5-room limit. The
-  // session is kept on the device, so this only creates a user the first time.
+  // rooms private to a person and countable against the per-user save limit
+  // (see design_repository.dart). The session is kept on the device, so this
+  // only creates a user the first time.
   // Failing here (offline, anonymous sign-ins off) must not stop the app:
   // generating still works, and saving asks again and explains if it can't.
   try {

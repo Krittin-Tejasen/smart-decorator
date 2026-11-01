@@ -216,6 +216,18 @@ String? describeTraits(FurnitureFeatures features) {
   return parts.isEmpty ? null : parts.join(' · ');
 }
 
+/// "W 1.20 m · D 0.80 m · H 0.75 m" — the real-world size measured from the
+/// scan, when the request included enough spatial data (see
+/// spatial_measurement.py). Null items (no scan data, or not enough depth
+/// under the footprint) are simply not shown — nothing to say is better than
+/// a guess.
+String describeDimensions(FurnitureDimensions d) {
+  String fmt(double meters) => meters >= 1
+      ? '${meters.toStringAsFixed(2)} m'
+      : '${(meters * 100).toStringAsFixed(0)} cm';
+  return 'W ${fmt(d.widthM)} · D ${fmt(d.depthM)} · H ${fmt(d.heightM)}';
+}
+
 /// Nothing in the catalog was similar enough. Said plainly rather than
 /// showing weak guesses.
 class _NoMatches extends StatelessWidget {
@@ -332,6 +344,27 @@ class _DetectedHeader extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 12, color: AppColors.ink),
+                  ),
+                ],
+
+                if (item.dimensionsM != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.straighten_rounded,
+                          size: 13, color: AppColors.muted),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          describeDimensions(item.dimensionsM!),
+                          key: const ValueKey('detected-dimensions'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.muted),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
 

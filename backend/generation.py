@@ -887,6 +887,15 @@ async def run_generate_room(
             and room_height_m is not None
         )
 
+        print(
+            f"[sizing] fields present: intrinsics={camera_intrinsics is not None} "
+            f"extrinsics={camera_extrinsics is not None} depth_map={depth_map_png is not None} "
+            f"depth_min={depth_min_m is not None} depth_max={depth_max_m is not None} "
+            f"floor_plan={floor_plan_points is not None} room_height={room_height_m is not None} "
+            f"-> has_spatial_data={has_spatial_data} has_floor_plan_data={has_floor_plan_data} "
+            f"items={len(seg_result.items)}"
+        )
+
         depth_source: str | None = None
 
         if has_spatial_data:

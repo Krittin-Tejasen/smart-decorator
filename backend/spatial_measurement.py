@@ -152,11 +152,16 @@ def measure_furniture(
 
     mh, mw = mask.shape
     dh, dw = depth.shape
+    print(f"[sizing/lidar] mask={mw}x{mh} depth_map={dw}x{dh} "
+          f"depth_range=[{depth_min_m:.2f},{depth_max_m:.2f}]m "
+          f"valid_depth_px={int(np.count_nonzero(depth > _MIN_VALID_DEPTH_M))}/{depth.size}")
     if mw == 0 or mh == 0 or dw == 0 or dh == 0:
+        print("[sizing/lidar] -> None: empty mask or depth map")
         return None
 
     cols_with_mask = np.where(np.any(mask, axis=0))[0]
     if cols_with_mask.size == 0:
+        print("[sizing/lidar] -> None: mask is entirely empty (no True pixels)")
         return None
 
     angle = room_rotation_angle(floor_plan_points)
@@ -190,6 +195,9 @@ def measure_furniture(
         sample_mask_col.append(int(col))
 
     if len(footprint_xz) < _MIN_VALID_SAMPLES:
+        print(f"[sizing/lidar] -> None: only {len(footprint_xz)} valid depth samples "
+              f"under the footprint (need {_MIN_VALID_SAMPLES}), out of "
+              f"{len(cols_with_mask[::step])} columns checked")
         return None
 
     xs = [p[0] for p in footprint_xz]
@@ -210,6 +218,8 @@ def measure_furniture(
     fy = intrinsics[4]
     height_m = abs((pixel_height / fy) * ref_distance)
 
+    print(f"[sizing/lidar] -> OK: {len(footprint_xz)} samples, "
+          f"W={width_m:.2f}m D={depth_m_out:.2f}m H={height_m:.2f}m")
     return {
         "width_m": round(width_m, 3),
         "depth_m": round(depth_m_out, 3),
@@ -266,7 +276,11 @@ def measure_furniture_monocular(
 
     mh, mw = mask.shape
     dh, dw = depth.shape
+    print(f"[sizing/mono] mask={mw}x{mh} depth_map={dw}x{dh} "
+          f"depth_range=[{depth_min_m:.2f},{depth_max_m:.2f}]m "
+          f"valid_depth_px={int(np.count_nonzero(depth > _MIN_VALID_DEPTH_M))}/{depth.size}")
     if mw == 0 or mh == 0 or dw == 0 or dh == 0:
+        print("[sizing/mono] -> None: empty mask or depth map")
         return None
 
     intrinsics = _estimate_intrinsics(mw, mh)
@@ -275,6 +289,7 @@ def measure_furniture_monocular(
     # Sample depth at mask pixels (scaled to depth map resolution)
     mask_rows, mask_cols = np.where(mask)
     if mask_rows.size == 0:
+        print("[sizing/mono] -> None: mask is entirely empty (no True pixels)")
         return None
 
     step = max(1, mask_rows.size // 256)
@@ -287,6 +302,8 @@ def measure_furniture_monocular(
 
     valid = depths > _MIN_VALID_DEPTH_M
     if valid.sum() < _MIN_VALID_SAMPLES:
+        print(f"[sizing/mono] -> None: only {int(valid.sum())} valid depth samples "
+              f"in the mask (need {_MIN_VALID_SAMPLES}), out of {depths.size} sampled pixels")
         return None
 
     valid_depths = depths[valid]
@@ -315,6 +332,8 @@ def measure_furniture_monocular(
     p25, p75 = float(np.percentile(valid_depths, 25)), float(np.percentile(valid_depths, 75))
     furniture_depth_m = max(abs(p75 - p25) * 1.5, 0.01)
 
+    print(f"[sizing/mono] -> OK: {int(valid.sum())} samples, "
+          f"W={width_m:.2f}m D={furniture_depth_m:.2f}m H={height_m:.2f}m")
     return {
         "width_m": round(width_m, 3),
         "depth_m": round(furniture_depth_m, 3),

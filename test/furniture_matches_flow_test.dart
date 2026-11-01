@@ -25,6 +25,7 @@ FurnitureItem furniture(
   bool crop = true,
   List<String> colors = const ['#725f4e', '#98826e'],
   FurnitureFeatures? features,
+  FurnitureDimensions? dimensionsM,
 }) {
   return FurnitureItem(
     id: id,
@@ -36,6 +37,7 @@ FurnitureItem furniture(
     maskImage: '',
     maskPrecise: cutout,
     features: features ?? FurnitureFeatures(dominantColors: colors, areaPct: 5, aspectRatio: 1),
+    dimensionsM: dimensionsM,
   );
 }
 
@@ -235,6 +237,38 @@ void main() {
       expect(describeTraits(with_(name: 'beige')), 'beige');
       expect(describeTraits(with_(m: [MaterialGuess(name: 'leather', confidence: 1)])), 'Leather');
       expect(describeTraits(with_()), isNull);
+    });
+  });
+
+  group('measured size (from a LiDAR scan)', () {
+    testWidgets('the header shows the item\'s real-world size', (tester) async {
+      usePhone(tester);
+      final dims = FurnitureDimensions(widthM: 1.2, depthM: 1.6, heightM: 0.75);
+      await tester.pumpWidget(appWith([furniture('sofa', dimensionsM: dims)]));
+      await settle(tester);
+
+      await tapCard(tester, 'Sofa');
+
+      expect(find.byKey(const ValueKey('detected-dimensions')), findsOneWidget);
+      expect(find.text('W 1.20 m · D 1.60 m · H 75 cm'), findsOneWidget);
+    });
+
+    testWidgets('nothing is shown when the scan had no size for this item', (tester) async {
+      usePhone(tester);
+      await tester.pumpWidget(appWith([furniture('sofa')]));
+      await settle(tester);
+
+      await tapCard(tester, 'Sofa');
+
+      expect(find.byKey(const ValueKey('detected-dimensions')), findsNothing);
+    });
+
+    test('describeDimensions switches to centimetres under a metre', () {
+      final small = FurnitureDimensions(widthM: 0.3, depthM: 0.25, heightM: 0.75);
+      final large = FurnitureDimensions(widthM: 1.5, depthM: 1.5, heightM: 2.1);
+
+      expect(describeDimensions(small), 'W 30 cm · D 25 cm · H 75 cm');
+      expect(describeDimensions(large), 'W 1.50 m · D 1.50 m · H 2.10 m');
     });
   });
 

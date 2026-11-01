@@ -63,7 +63,7 @@ class SupabaseDesignRepository implements DesignRepository {
         _injected = client;
 
   /// Must match public.max_saved_designs() in the Supabase migration.
-  static const int savedDesignLimit = 5;
+  static const int savedDesignLimit = 100;
   static const _bucket = 'room-images';
   static const _table = 'room_designs';
   static const _limitMessage = 'save_limit_reached';
