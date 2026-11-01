@@ -71,6 +71,12 @@ class ExtractDimsTests(unittest.TestCase):
         ])
         self.assertEqual((dims["width_cm"], dims["height_cm"], dims["depth_cm"]), (70.0, 75.0, 80.0))
 
+    def test_a_cord_is_not_the_depth_of_a_lamp(self):
+        dims = extract_dims(m(Cord_length='6 \' 7 "', Height='59 "', Shade_width='15 "'))
+        self.assertIsNone(dims["depth_cm"])
+        self.assertIsNone(dims["length_cm"])
+        self.assertEqual(dims["height_cm"], 149.86)
+
     def test_other_catalog_languages(self):
         romanian = extract_dims([
             {"name": "Lățime", "value": "60 cm"}, {"name": "Înălțime", "value": "80 cm"}, {"name": "Adâncime", "value": "40 cm"},

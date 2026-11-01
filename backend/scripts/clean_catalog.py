@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from app.services.catalog_attributes import extract_color_from_title, material_tags, materials_text
+from app.services.category_types import fill_missing_types, resolve_category_paths
 from app.services.furniture_types import types_by_unique_id
 from app.services.measurements import extract_dims
 
@@ -53,12 +54,15 @@ FALLBACK_RATES = {
     'OMR': 0.0104, 'QAR': 0.099, 'SGD': 0.036, 'INR': 2.87, 'HUF': 9.3,
 }
 
+# Country sites whose category names are English.
+ENGLISH_SITES = {'gb', 'us', 'au', 'ca', 'sg', 'ie', 'in', 'my', 'ph', 'th', 'hk', 'nz'}
+
 FIELDS = [
     'unique_id', 'sku', 'main_title', 'description', 'in_stock', 'color', 'size', 'main_image',
     'category', 'category_id', 'url', 'country_code', 'currency', 'final_price', 'thb_price',
     'width_cm', 'height_cm', 'depth_cm', 'length_cm', 'diameter_cm', 'has_dims', 'size_label',
     'material_tags', 'material_tag', 'is_wood', 'is_metal', 'is_fabric', 'is_plastic', 'is_glass',
-    'color_extracted', 'furniture_type', 'search_context',
+    'color_extracted', 'furniture_type', 'type_source', 'search_context',
 ]
 
 
@@ -89,15 +93,15 @@ def to_thb(row: dict[str, Any], rates: dict[str, float], unresolved: list[dict[s
 
 
 def size_label(dims: dict[str, float | None]) -> str | None:
-    """"80x202 cm" / "80x202x40 cm"; needs width and height."""
-    if dims['width_cm'] is None or dims['height_cm'] is None:
+    """"80x202 cm" / "80x202x40 cm": width, height, depth in that order, leaving out
+    the ones the product doesn't give (a rug is "80x150 cm": width x length).
+    None without a width."""
+    if dims['width_cm'] is None:
         return None
     def fmt(v: float) -> str:
         return str(int(v)) if v == int(v) else str(round(v, 1))
-    parts = [fmt(dims['width_cm']), fmt(dims['height_cm'])]
-    if dims['depth_cm'] is not None:
-        parts.append(fmt(dims['depth_cm']))
-    return 'x'.join(parts) + ' cm'
+    parts = [fmt(dims[key]) for key in ('width_cm', 'height_cm', 'depth_cm') if dims[key] is not None]
+    return 'x'.join(parts) + ' cm' if len(parts) > 1 else None
 
 
 def clean_text(text: Any) -> str:
@@ -164,6 +168,9 @@ def main() -> None:
     rows: list[dict[str, Any]] = []
     currency_log: list[dict[str, Any]] = []
     unread_names: Counter[str] = Counter()
+    # category_id -> English path. The id is the same on every country's site, so the
+    # English path of an id names the category of its Arabic or Hebrew products too.
+    category_paths: dict[str, dict[str, list[str]]] = {}
 
     for index, raw in enumerate(read_raw(args.raw_json), start=1):
         seen[str(raw.get('sku'))] += 1
@@ -173,13 +180,20 @@ def main() -> None:
             for item in raw.get('measurements') or []:
                 if isinstance(item, dict) and item.get('name'):
                     unread_names[str(item['name']).strip().lower()] += 1
+        if raw.get('category_tree'):
+            by_country = category_paths.setdefault(str(raw.get('category_id')), {})
+            by_country.setdefault(str(raw.get('country_code')).lower(), [c.get('name') for c in raw['category_tree']])
         rows.append(row)
         if index % 10000 == 0:
             print(f'{index} rows read...')
 
-    types = types_by_unique_id(rows)
+    # Title first (it reads the product's own words), then the category fills what
+    # the title could not name, so no product is left without a type.
+    title_types = types_by_unique_id(rows)
+    types = fill_missing_types(title_types, rows, resolve_category_paths(category_paths, ENGLISH_SITES))
     for row in rows:
-        row['furniture_type'] = types.get(row['unique_id'])
+        row['furniture_type'] = types[row['unique_id']]
+        row['type_source'] = 'title' if title_types.get(row['unique_id'], 'other') != 'other' else 'category'
 
     with open(args.out / 'catalog_clean.csv', 'w', newline='', encoding='utf-8') as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS, extrasaction='ignore')
@@ -195,9 +209,9 @@ def main() -> None:
         writer.writerows(unread_names.most_common())
 
     sized = sum(1 for r in rows if r['has_dims'])
-    typed = sum(1 for r in rows if r['furniture_type'])
+    typed = sum(1 for r in rows if r['furniture_type'] != 'other')
     print(f'{len(rows)} rows kept (none dropped). With any size: {sized} ({sized / len(rows):.1%}).')
-    print(f'With furniture_type: {typed} ({typed / len(rows):.1%}). Unresolved currency: {len(currency_log)} rows.')
+    print(f'With a specific furniture_type (not "other"): {typed} ({typed / len(rows):.1%}). Unresolved currency: {len(currency_log)} rows.')
     print(f'Output in {args.out.resolve()}')
 
 

@@ -18,7 +18,7 @@ Everything here is a heuristic on titles: it never looks at the picture.
 
 import re
 
-KITCHEN_FAM = {"METOD", "MAXIMERA", "SEKTION", "KNOXHULT", "SUNNERSTA", "UTRUSTA"}
+KITCHEN_FAM = {"METOD", "MAXIMERA", "SEKTION", "KNOXHULT", "SUNNERSTA", "UTRUSTA", "JÄRNBODA"}
 BATH_FAM = {"ÄNGSJÖN", "HAVBÄCK", "TÄNNFORSEN", "ORRSJÖN", "GODMORGON", "BROGRUND", "RÄTTVIKEN", "ODENSVIK", "LILLÅNGEN", "SKATSJÖN", "VOXNAN", "SALJEN", "STORKAJEN"}
 
 

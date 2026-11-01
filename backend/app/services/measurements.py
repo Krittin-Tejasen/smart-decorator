@@ -132,11 +132,16 @@ def _entries(measurements: Any) -> list[tuple[str, Any]]:
     return out
 
 
+# Measurements of a cable or of a rug's pile are not the size of the product:
+# a lamp's 160 cm "Cord length" is not its depth.
+_NOT_THE_PRODUCT = re.compile(r"\b(cord|cable|wire|pile|chain|cordon|kabel|cavo|cabo|cable)\b|الكابل|السلك", re.IGNORECASE)
+
+
 def _candidates(entries: Iterable[tuple[str, Any]], dim: str) -> list[tuple[tuple[int, int, int], str, Any]]:
     stems = _STEMS[dim]
     found = []
     for name, value in entries:
-        if not any(stem in name for stem in stems):
+        if not any(stem in name for stem in stems) or _NOT_THE_PRODUCT.search(name):
             continue
         if name in _EXACT[dim]:
             tier = 0
