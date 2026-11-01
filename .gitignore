@@ -44,8 +44,8 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# exclude .env file 
+# exclude .env file
 .env
 
-# Claude Code local guidance
+# Claude Code project instructions (local only)
 CLAUDE.md

@@ -203,6 +203,20 @@ Unit tests for the clean-up logic (no models needed):
 python -m unittest discover -s tests -v
 ```
 
+### Colour and material features
+
+Each segmented item also carries `features.colors` (up to 3 measured colours, each mapped to
+one of the product catalog's 12 colour words in `catalog_color`) and — from one Gemini call
+per room — `features.materials`, `finish`, `color_name` and `meta.usable`. Materials use
+the vocabulary in `backend/feature_vocab.py`, which also maps them to the catalog's
+`material_tag` groups (leather → fabric, rattan → wood, ceramic/stone/paper → other).
+
+- `FEATURE_PROVIDER=none` skips the Gemini call (items then have colours only,
+  `meta.source == "pixels_only"`). Default is `gemini`; it needs `GEMINI_API_KEY` and
+  costs roughly 1k input tokens per item.
+- `GEMINI_FEATURE_MODEL` overrides the model (defaults to `GEMINI_VISION_MODEL`).
+- A failed Gemini call never fails segmentation.
+
 ## Product Matching
 
 `POST /match-products` (`backend/product_matching.py`) finds real IKEA products for one

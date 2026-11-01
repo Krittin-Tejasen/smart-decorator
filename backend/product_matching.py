@@ -20,6 +20,12 @@ Pipeline (choices follow pinecone-evaluation/EVALUATION_REPORT_EXPANDED_TH.md):
   the response says which was used. A user's price range is never relaxed.
 - A width filter helped only while the width was exact (84.5%) and fell to
   ~24% (worse than no filter) with a 10% error, so width only nudges ranking.
+- The user can switch on a colour and/or a material filter in the app. The
+  item's colours/materials then become extra Pinecone metadata conditions
+  (match_features.metadata_filter) next to the type and price ones, so only
+  products with a matching catalog colour / material tag are searched. It is a
+  hard filter: it can leave nothing, and then the answer is empty (the app says
+  so) rather than quietly dropping the condition.
 - Product photos are IKEA's own URLs and the cutout arrives in the request:
   nothing here reads or writes object storage.
 """
@@ -36,6 +42,7 @@ from PIL import Image
 
 from app.core.config import settings
 from app.services.furniture_types import FURNITURE_TYPES, image_group_key, label_to_type
+from match_features import metadata_filter, parse_item_colors, parse_item_materials
 
 router = APIRouter(tags=["product-matching"])
 
@@ -67,9 +74,11 @@ def build_filter_ladder(
     min_price: float | None = None,
     max_price: float | None = None,
     in_stock_only: bool = False,
+    extra_filter: dict[str, Any] | None = None,
 ) -> list[FilterLevel]:
     """Filters to try, strictest first. The price range is part of every
-    level: it is the user's budget, not a hint.
+    level: it is the user's budget, not a hint. So is `extra_filter` (the
+    colour / material the user switched on): those levels are never relaxed.
 
     A label with a furniture type is only ever searched within that type. An
     image-only search is a fallback for labels the catalog can't be filtered by
@@ -82,6 +91,7 @@ def build_filter_ladder(
     if max_price is not None:
         price["$lte"] = float(max_price)
     base: dict[str, Any] = {"thb_price": price} if price else {}
+    base.update(extra_filter or {})
 
     levels: list[FilterLevel] = []
     if furniture_type:
@@ -169,6 +179,18 @@ def confidence_of(score: float) -> str:
     return "low"
 
 
+def material_label(row: dict[str, Any]) -> str | None:
+    """Every material tag of a product, e.g. "Wood, Metal" for "Wood|Metal".
+    Only the first tag used to be shown, so a product that passed the material
+    filter on its Metal tag read as "Wood"."""
+    tags: list[str] = []
+    for part in str(row.get("material_tags") or row.get("material_tag") or "").split("|"):
+        part = part.strip()
+        if part and part.lower() not in {t.lower() for t in tags}:
+            tags.append(part)
+    return ", ".join(tags) or None
+
+
 def to_product_match(candidate: Candidate, link_ok: bool | None) -> dict[str, Any]:
     """The JSON the app reads into its ProductMatch model."""
     row = candidate.row
@@ -182,7 +204,7 @@ def to_product_match(candidate: Candidate, link_ok: bool | None) -> dict[str, An
         "depth_cm": _as_float(row.get("depth_cm")),
         "height_cm": _as_float(row.get("height_cm")),
         "color_name": row.get("color_extracted") or None,
-        "material": row.get("material_tag") or None,
+        "material": material_label(row),
         "in_stock": bool(row.get("in_stock")),
         "url": row.get("url") or None,
         "country_code": row.get("country_code") or None,
@@ -255,6 +277,7 @@ def find_candidates(
     top_k: int = 5,
     min_score: float | None = None,
     furniture_type: str | None = None,
+    extra_filter: dict[str, Any] | None = None,
 ) -> MatchResult:
     """Blocking part of a match (CLIP, Pinecone, Supabase); run it in a thread."""
     # Imported here so the app starts (and other endpoints work) even before
@@ -268,7 +291,7 @@ def find_candidates(
     furniture_type = furniture_type or label_to_type(label)
     vector = encode_image(image)
 
-    levels = build_filter_ladder(furniture_type, min_price, max_price, in_stock_only)
+    levels = build_filter_ladder(furniture_type, min_price, max_price, in_stock_only, extra_filter)
     result = MatchResult(furniture_type, levels[-1].name, [], 0)
     for level in levels:
         matches = query_similar(vector, top_k=_CANDIDATE_POOL, metadata_filter=level.filter, dedupe=False)
@@ -293,6 +316,8 @@ async def match_products(
     in_stock_only: bool = Form(False),
     top_k: int = Form(5, ge=1, le=20),
     furniture_type: str | None = Form(None, description="A type the user picked; used instead of the one guessed from the label."),
+    colors: str | None = Form(None, description="Send only when the Colour filter is on: JSON [{catalog_color, share}, ...] of the item; keeps products of those colours (and neighbouring ones)."),
+    materials: str | None = Form(None, description="Send only when the Material filter is on: JSON [{name, confidence}, ...] of the item; keeps products with one of those materials."),
 ):
     if min_price is not None and max_price is not None and min_price > max_price:
         raise HTTPException(status_code=422, detail="min_price is greater than max_price.")
@@ -318,6 +343,11 @@ async def match_products(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.") from exc
 
+    extra_filter = metadata_filter(
+        parse_item_colors(colors) if colors is not None else None,
+        parse_item_materials(materials) if materials is not None else None,
+    )
+
     try:
         result = await asyncio.to_thread(
             find_candidates,
@@ -329,9 +359,18 @@ async def match_products(
             in_stock_only=in_stock_only,
             top_k=top_k,
             furniture_type=furniture_type,
+            extra_filter=extra_filter or None,
         )
     except RuntimeError as exc:  # missing PINECONE_API_KEY / SUPABASE_* on this machine
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ImportError as exc:  # sentence-transformers / pinecone not installed in this venv
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Product matching needs the Python package '{exc.name or exc}', which is not installed "
+                "on the server. Run: pip install -r requirements.txt"
+            ),
+        ) from exc
 
     return {
         "label": label,
@@ -341,4 +380,6 @@ async def match_products(
         "below_threshold": result.below_threshold,
         "matches": await pick_with_live_links(result.candidates, top_k),
         "needs_type": False,
+        # Which of the user's filters were applied (they are never relaxed).
+        "filters": [name for name, key in (("color", "color"), ("material", "$or")) if key in extra_filter],
     }
