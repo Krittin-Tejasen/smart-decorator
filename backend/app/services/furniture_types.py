@@ -162,6 +162,58 @@ def label_to_type(label: str | None) -> str | None:
     return classify_title(key)
 
 
+# ── Subtypes: a floor lamp is not a pendant ─────────────────────────────────
+# `lamp` alone merged floor, table, pendant, ceiling and wall lamps, so a floor
+# lamp in a room could be matched with a chandelier. The subtype narrows a
+# query first; the type is still the fallback (product_matching.build_filter_ladder).
+# Order matters: "pendant" before "ceiling" before "wall" before "floor" before "table".
+_LAMP_SUBTYPES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (name, re.compile(pattern))
+    for name, pattern in (
+        ("pendant", r"\bpendant\b|chandelier|hängeleuchte|pendelleuchte|suspension|suspendu|sospensione|lámpara colgante|colgante|candeeiro suspenso|hanglamp|kroonluchter|\blustre\b|taklampa|pendente"),
+        ("ceiling", r"\bceiling\b|plafon|deckenleuchte|deckenlampe|soffitto|\btecho\b|plafondlamp|plafoniera"),
+        ("wall", r"\bwall (lamp|light)\b|wandleuchte|wandlampe|applique|lámpara de pared|lampada da parete|\bwall\b|parete"),
+        ("floor", r"\bfloor\b|stehleuchte|stehlampe|lampadaire|lámpara de pie|\bde pie\b|lampada da terra|candeeiro de pé|vloerlamp|golvlampa|reading lamp"),
+        ("table", r"\btable lamp\b|\bdesk lamp\b|\bwork lamp\b|tischleuchte|tischlampe|lampe de table|lampe de bureau|lámpara de mesa|lampada da tavolo|lampada da scrivania|tafellamp|bordslampa|candeeiro de mesa|\btable\b"),
+    )
+)
+_LABEL_TO_SUBTYPE: dict[str, str] = {
+    "floor lamp": "floor",
+    "table lamp": "table",
+    "pendant lamp": "pendant",
+    "chandelier": "pendant",
+}
+
+
+def lamp_subtype(title: str | None) -> str | None:
+    """floor / table / pendant / ceiling / wall for a lamp title, or None."""
+    text = (title or "").lower()
+    for name, pattern in _LAMP_SUBTYPES:
+        if pattern.search(text):
+            return name
+    return None
+
+
+def label_to_subtype(label: str | None) -> str | None:
+    """The subtype a segmentation label names ("floor lamp" -> "floor"); None
+    for labels that name only a type ("lamp", "sofa")."""
+    key = " ".join((label or "").lower().replace("_", " ").split())
+    return _LABEL_TO_SUBTYPE.get(key)
+
+
+# Types close enough that, when a label's own type has nothing, they are the
+# next thing to search. Used only when the type returned nothing: never to pad
+# a result that exists (a lamp matching drawer fronts is the case this guards).
+RELATED_TYPES: dict[str, tuple[str, ...]] = {
+    "tv_bench": ("cabinet",),            # a BESTÅ sideboard is often the TV unit
+    "cabinet": ("dresser", "bookshelf"),
+    "dresser": ("cabinet",),
+    "side_table": ("coffee_table", "nightstand"),
+    "coffee_table": ("side_table",),
+    "nightstand": ("side_table", "dresser"),
+}
+
+
 # ── Grouping catalog rows that show the same product ────────────────────────
 
 # IKEA image URLs embed an image id ("malm-bed-frame-high-white__0749130_pe745499_s5.jpg"
@@ -204,7 +256,52 @@ def types_by_unique_id(rows: Iterable[dict[str, Any]]) -> dict[str, str]:
         if extra is not None and (group_type is None or extra in OVERRIDING_TYPES):
             group_type = extra
         if group_type is None:
+            group_type = table_type_from_size(members)
+        if group_type is None:
             continue
         for row in members:
             result[str(row["unique_id"])] = group_type
     return result
+
+
+def subtypes_by_unique_id(rows: Iterable[dict[str, Any]], types: dict[str, str]) -> dict[str, str]:
+    """`furniture_subtype` for the rows whose group is a lamp: the majority
+    vote of lamp_subtype over the titles of the image group."""
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if types.get(str(row.get("unique_id"))) == "lamp":
+            groups[image_group_key(row.get("main_image"), row.get("sku"))].append(row)
+    result: dict[str, str] = {}
+    for members in groups.values():
+        votes = Counter(lamp_subtype(row.get("main_title")) for row in members)
+        votes.pop(None, None)
+        if not votes:
+            continue
+        subtype = votes.most_common(1)[0][0]
+        for row in members:
+            result[str(row["unique_id"])] = subtype
+    return result
+
+
+_BARE_TABLE = re.compile(r"^(?:[A-ZÅÄÖÆØÜÉ0-9/ ]{3,}\s+)?(?:table|tables)\b(?!\s+(?:lamp|top|runner|cloth|mat|pad))", re.IGNORECASE)
+
+
+def table_type_from_size(members: list[dict[str, Any]]) -> str | None:
+    """A title that says only "table" ("TONSTAD table, oak veneer") names no
+    kind of table. Its size does: low and large is a coffee table, low and
+    small a side table, tall and wide a dining table. Returns None when the
+    title isn't a bare "table" or the size is unknown."""
+    if not any(_BARE_TABLE.match((row.get("main_title") or "").strip()) for row in members):
+        return None
+    for row in members:
+        try:
+            height = float(row.get("height_cm"))
+            reach = max(float(row.get("width_cm") or 0), float(row.get("depth_cm") or 0))
+        except (TypeError, ValueError):
+            continue
+        if height <= 0 or reach <= 0:
+            continue
+        if height <= 60:
+            return "coffee_table" if reach >= 70 else "side_table"
+        return "dining_table" if reach >= 100 else "side_table" if reach < 60 else "desk"
+    return None

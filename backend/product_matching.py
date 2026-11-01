@@ -41,7 +41,13 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image
 
 from app.core.config import settings
-from app.services.furniture_types import FURNITURE_TYPES, image_group_key, label_to_type
+from app.services.furniture_types import (
+    FURNITURE_TYPES,
+    RELATED_TYPES,
+    image_group_key,
+    label_to_subtype,
+    label_to_type,
+)
 from match_features import metadata_filter, parse_item_colors, parse_item_materials
 
 router = APIRouter(tags=["product-matching"])
@@ -75,16 +81,19 @@ def build_filter_ladder(
     max_price: float | None = None,
     in_stock_only: bool = False,
     extra_filter: dict[str, Any] | None = None,
+    furniture_subtype: str | None = None,
 ) -> list[FilterLevel]:
     """Filters to try, strictest first. The price range is part of every
     level: it is the user's budget, not a hint. So is `extra_filter` (the
     colour / material the user switched on): those levels are never relaxed.
 
-    A label with a furniture type is only ever searched within that type. An
-    image-only search is a fallback for labels the catalog can't be filtered by
-    ("decoration"): for a typed label it returned products of other types with
-    high scores (a lamp matched drawer fronts at 0.86), which is worse than
-    saying nothing was found."""
+    A label with a furniture type is only ever searched within that type (plus,
+    when the type has nothing at all, the few types in RELATED_TYPES). A
+    subtype ("floor" lamp) is tried before the type. An image-only search is a
+    fallback for labels the catalog can't be filtered by ("decoration"): for a
+    typed label it returned products of other types with high scores (a lamp
+    matched drawer fronts at 0.86), which is worse than saying nothing was
+    found."""
     price: dict[str, float] = {}
     if min_price is not None:
         price["$gte"] = float(min_price)
@@ -96,9 +105,17 @@ def build_filter_ladder(
     levels: list[FilterLevel] = []
     if furniture_type:
         typed = {**base, "furniture_type": {"$eq": furniture_type}}
+        if furniture_subtype:
+            sub = {**typed, "furniture_subtype": {"$eq": furniture_subtype}}
+            if in_stock_only:
+                levels.append(FilterLevel("subtype+stock", {**sub, "in_stock": {"$eq": True}}))
+            levels.append(FilterLevel("subtype", sub))
         if in_stock_only:
             levels.append(FilterLevel("type+stock", {**typed, "in_stock": {"$eq": True}}))
         levels.append(FilterLevel("type", typed))
+        related = RELATED_TYPES.get(furniture_type)
+        if related:
+            levels.append(FilterLevel("related", {**base, "furniture_type": {"$in": list(related)}}))
         return levels
     if in_stock_only:
         levels.append(FilterLevel("stock", {**base, "in_stock": {"$eq": True}}))
@@ -288,10 +305,12 @@ def find_candidates(
 
     threshold = settings.match_min_score if min_score is None else min_score
     # A type the user chose beats the one guessed from the label.
+    # A subtype only narrows the label's own guess, never a type the user picked.
+    furniture_subtype = None if furniture_type else label_to_subtype(label)
     furniture_type = furniture_type or label_to_type(label)
     vector = encode_image(image)
 
-    levels = build_filter_ladder(furniture_type, min_price, max_price, in_stock_only, extra_filter)
+    levels = build_filter_ladder(furniture_type, min_price, max_price, in_stock_only, extra_filter, furniture_subtype)
     result = MatchResult(furniture_type, levels[-1].name, [], 0)
     for level in levels:
         matches = query_similar(vector, top_k=_CANDIDATE_POOL, metadata_filter=level.filter, dedupe=False)

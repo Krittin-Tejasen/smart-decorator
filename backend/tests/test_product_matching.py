@@ -177,6 +177,60 @@ class FilterLadderTests(unittest.TestCase):
         self.assertEqual([l.name for l in pm.build_filter_ladder(None, in_stock_only=True)], ["stock", "image_only"])
 
 
+class SubtypeAndRelatedTests(unittest.TestCase):
+    def test_lamp_subtypes_in_several_languages(self):
+        cases = {
+            "HÅRSLINGA Floor lamp - black": "floor",
+            "SIMRISHAMN table lamp, chrome plated": "table",
+            "STORSLINGA LED chandelier, 8-armed": "pendant",
+            "TÖVÄDER Kroonluchter": "pendant",
+            "FUBBLA LED wall lamp - white": "wall",
+            "VÄXJÖ Deckenleuchte": "ceiling",
+            "LAMPAN Stehleuchte": "floor",
+            "SYMFONISK Sonos speaker lamp base": None,
+        }
+        for title, expected in cases.items():
+            with self.subTest(title=title):
+                self.assertEqual(ft.lamp_subtype(title), expected)
+
+    def test_labels_name_a_subtype_only_when_they_say_one(self):
+        self.assertEqual(ft.label_to_subtype("floor_lamp"), "floor")
+        self.assertEqual(ft.label_to_subtype("chandelier"), "pendant")
+        self.assertIsNone(ft.label_to_subtype("lamp"))
+        self.assertIsNone(ft.label_to_subtype("sofa"))
+
+    def test_a_groups_lamp_subtype_is_the_majority_of_its_titles(self):
+        rows = [
+            row("1", "RANARP Floor/reading lamp", image_id="9_pe9", sku="9"),
+            row("2", "RANARP Stehleuchte", image_id="9_pe9", sku="9"),
+        ]
+        self.assertEqual(ft.subtypes_by_unique_id(rows, {"1": "lamp", "2": "lamp"}), {"1": "floor", "2": "floor"})
+        self.assertEqual(ft.subtypes_by_unique_id(rows, {"1": "sofa", "2": "sofa"}), {})
+
+    def test_subtype_is_tried_before_type_then_related_types(self):
+        names = [l.name for l in pm.build_filter_ladder("lamp", furniture_subtype="floor")]
+        self.assertEqual(names, ["subtype", "type"])
+        levels = pm.build_filter_ladder("tv_bench")
+        self.assertEqual([l.name for l in levels], ["type", "related"])
+        self.assertEqual(levels[1].filter["furniture_type"], {"$in": ["cabinet"]})
+        # types with no close neighbour are never widened
+        self.assertEqual([l.name for l in pm.build_filter_ladder("sofa")], ["type"])
+
+    def test_budget_applies_to_every_level(self):
+        for level in pm.build_filter_ladder("tv_bench", max_price=9000, furniture_subtype=None):
+            self.assertEqual(level.filter["thb_price"], {"$lte": 9000.0})
+
+    def test_a_bare_table_is_named_by_its_size(self):
+        def group(title, **dims):
+            return [{"unique_id": "1", "main_title": title, "main_image": None, "sku": "1", **dims}]
+        self.assertEqual(ft.types_by_unique_id(group("TONSTAD table, oak veneer", height_cm=45, width_cm=90, depth_cm=60)), {"1": "coffee_table"})
+        self.assertEqual(ft.types_by_unique_id(group("HAUGA Table - white", height_cm=75, width_cm=140, depth_cm=80)), {"1": "dining_table"})
+        self.assertEqual(ft.types_by_unique_id(group("HAUGA Table - white", height_cm=50, width_cm=40, depth_cm=40)), {"1": "side_table"})
+        # no size, or not a bare "table": nothing is guessed
+        self.assertEqual(ft.types_by_unique_id(group("TONSTAD table, oak veneer")), {})
+        self.assertEqual(ft.types_by_unique_id(group("SOMETHING table lamp", height_cm=45, width_cm=20)), {"1": "lamp"})
+
+
 class RankingTests(unittest.TestCase):
     def test_size_is_free_within_tolerance_and_capped_beyond(self):
         self.assertEqual(pm.size_penalty(200, 230), 0.0)
