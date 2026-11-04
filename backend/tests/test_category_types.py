@@ -1,6 +1,11 @@
 import unittest
 
-from app.services.category_types import fill_missing_types, resolve_category_paths, type_from_category
+from app.services.category_types import (
+    fill_missing_types,
+    one_type_per_product,
+    type_from_category,
+    types_by_category_id,
+)
 
 
 def path(*names):
@@ -38,44 +43,87 @@ class TypeFromCategoryTests(unittest.TestCase):
         self.assertEqual(type_from_category(path("Speakers", "Bluetooth speakers")), "electronics")
 
     def test_never_none(self):
-        self.assertEqual(type_from_category([]), "other")
-        self.assertEqual(type_from_category(["Products", "Zzz unknown"]), "other")
-        self.assertEqual(type_from_category([None, "", "Products"]), "other")
+        for unreadable in ([], ["Products", "Zzz unknown"], [None, "", "Products"]):
+            self.assertEqual(type_from_category(unreadable), "household")
+            self.assertNotEqual(type_from_category(unreadable), "other")
 
 
 class FillMissingTypesTests(unittest.TestCase):
-    PATHS = {"100": path("Bookcases & shelving units", "Bookcases"), "200": path("Cookware", "Pots")}
+    TYPES = {"100": "bookshelf", "200": "kitchenware"}
 
     def test_missing_types_come_from_the_category_id_in_any_language(self):
         rows = [
             {"unique_id": "a", "category_id": "100"},   # an Arabic title, same category id
             {"unique_id": "b", "category_id": "200"},
-            {"unique_id": "c", "category_id": "999"},   # an id with no English path
+            {"unique_id": "c", "category_id": "999"},   # an unknown id
         ]
-        filled = fill_missing_types({}, rows, self.PATHS)
-        self.assertEqual(filled, {"a": "bookshelf", "b": "kitchenware", "c": "other"})
+        filled = fill_missing_types({}, rows, self.TYPES)
+        self.assertEqual(filled, {"a": "bookshelf", "b": "kitchenware", "c": "household"})
 
     def test_a_title_type_is_never_replaced(self):
         rows = [{"unique_id": "a", "category_id": "200"}]
-        self.assertEqual(fill_missing_types({"a": "sofa"}, rows, self.PATHS), {"a": "sofa"})
+        self.assertEqual(fill_missing_types({"a": "sofa"}, rows, self.TYPES), {"a": "sofa"})
 
     def test_a_title_other_does_not_block_the_category(self):
         # "other" from the title reader only means a small-item word matched.
         rows = [{"unique_id": "a", "category_id": "200"}]
-        self.assertEqual(fill_missing_types({"a": "other"}, rows, self.PATHS), {"a": "kitchenware"})
+        self.assertEqual(fill_missing_types({"a": "other"}, rows, self.TYPES), {"a": "kitchenware"})
         rows = [{"unique_id": "b", "category_id": "999"}]
-        self.assertEqual(fill_missing_types({"b": "other"}, rows, self.PATHS), {"b": "other"})
+        self.assertEqual(fill_missing_types({"b": "other"}, rows, self.TYPES), {"b": "household"})
 
-    def test_a_path_is_read_from_any_country_when_no_english_site_has_one(self):
+
+class OneTypePerProductTests(unittest.TestCase):
+    def test_every_row_of_a_product_gets_the_majority_type(self):
+        rows = [
+            {"unique_id": "gb", "group_key": "img:1"},
+            {"unique_id": "de", "group_key": "img:1"},
+            {"unique_id": "sa", "group_key": "img:1"},
+            {"unique_id": "x", "group_key": "img:2"},
+        ]
+        types = {"gb": "bookshelf", "de": "bookshelf", "sa": "cabinet", "x": "rug"}
+        self.assertEqual(
+            one_type_per_product(types, rows),
+            {"gb": "bookshelf", "de": "bookshelf", "sa": "bookshelf", "x": "rug"},
+        )
+
+    def test_a_tie_goes_to_the_first_row(self):
+        rows = [{"unique_id": "a", "group_key": "k"}, {"unique_id": "b", "group_key": "k"}]
+        self.assertEqual(one_type_per_product({"a": "lamp", "b": "mirror"}, rows), {"a": "lamp", "b": "lamp"})
+
+
+class TypesByCategoryIdTests(unittest.TestCase):
+    def test_countries_vote_and_unreadable_paths_do_not(self):
+        # the real id 18751: one site says "Pendant lighting", others "Pendants" or another language
         paths = {
-            "1": {"de": ["Produkte", "Küche"], "ae": ["Products", "Bar furniture", "Bar tables sets"]},
-            "2": {"gb": ["Products", "Rugs"], "ae": ["Products", "Mats"]},
-            "3": {"fr": ["Produits", "Zzz"]},
+            "18751": {
+                "us": path("Lamps & light fixtures", "Ceiling lights", "Pendant lighting"),
+                "qa": path("Lamps", "Ceiling lights", "Pendants"),
+                "de": ["Produkte", "Beleuchtung", "Hängeleuchten"],
+                "my": ["Produk", "Pencahayaan"],
+            }
         }
-        resolved = resolve_category_paths(paths, ("gb", "us"))
-        self.assertEqual(resolved["1"], ["Products", "Bar furniture", "Bar tables sets"])
-        self.assertEqual(resolved["2"], ["Products", "Rugs"])
-        self.assertNotIn("3", resolved)
+        self.assertEqual(types_by_category_id(paths, ("gb", "us"))["18751"], "lamp")
+
+    def test_the_majority_wins_over_a_single_odd_path(self):
+        paths = {"1": {
+            "gb": path("Rugs", "Round rugs"), "us": path("Rugs", "Large & medium rugs"),
+            "ae": path("Rugs", "Runners & small rugs"), "sg": path("Bath textiles", "Bath mats"),
+        }}
+        self.assertEqual(types_by_category_id(paths, ("gb", "us", "sg"))["1"], "rug")
+
+    def test_a_tie_goes_to_the_english_site(self):
+        paths = {"1": {"gb": path("Mirrors"), "de": path("Candles and candle holders")}}
+        self.assertEqual(types_by_category_id(paths, ("gb",))["1"], "mirror")
+
+    def test_an_id_no_path_can_read_is_a_household_item_never_other(self):
+        self.assertEqual(types_by_category_id({"3": {"fr": ["Produits", "Zzz"]}})["3"], "household")
+
+    def test_laundry_furniture_in_dutch_and_spanish(self):
+        paths = {"48925": {
+            "nl": ["Producten", "Badkamerproducten", "Washok", "Wasmachinekasten & wasmachinerekken"],
+            "cl": ["Productos", "Baño", "Lavandería y lavadero", "Muebles para lavadero"],
+        }}
+        self.assertEqual(types_by_category_id(paths)["48925"], "cabinet")
 
 
 if __name__ == "__main__":

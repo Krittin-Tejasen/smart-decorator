@@ -8,8 +8,9 @@ types the products of that id in every language.
 
 `type_from_category` reads that English path. Rules are tried in order and the
 first match wins, so specific names come before the general words they contain
-("Sofa & armchairs covers" is a textile, not a sofa). Every path gets a type:
-what no rule names is "other". Types that are not furniture a room is furnished
+("Sofa & armchairs covers" is a textile, not a sofa). Every product gets a type
+and there is no "other": a category no rule reads is a "household" item
+(FALLBACK_TYPE). Types that are not furniture a room is furnished
 with (cookware, tableware, toys...) are named too, so each product has a label
 and the catalog can be scaled to other uses later.
 
@@ -18,6 +19,7 @@ Titles stay first: this only fills products whose title gave no type
 """
 
 import re
+from collections import Counter
 from typing import Iterable
 
 # (type, regex over the lower-cased path "a > b > c", root "Products" removed).
@@ -94,6 +96,7 @@ _RULES: tuple[tuple[str, str], ...] = (
                    r"bathroom shelves|towel rails"),
     ("cabinet", r"cabinets|cupboards|sideboards|buffets|display cabinets|storage units|"
                 r"storage combinations|storage solution systems|storage units & cabinets|"
+                r"wasmachinekast|wasmachinerek|muebles para lavadero|"
                 r"pax|bestå|boaxel|aurdal|ivar|platsa|eket|skytta|bror|shoe|garden storage|"
                 r"children's furniture|room dividers|cat furniture|small storage|trolleys"),
     ("storage_box", r"under bed storage|boxes|baskets|storage boxes|food storage|jars|paper & media|file|magazine|"
@@ -127,62 +130,102 @@ _COMPILED = tuple((name, re.compile(pattern)) for name, pattern in _RULES)
 # is read. "Products" is the site root and says nothing.
 _ROOT = "products"
 
+# What a product is when no rule reads its category: a household item. There is
+# no "other" label: every product says what it is. "household" also names the
+# things the rules put there on purpose (tools, hooks, cleaning, safety...).
+FALLBACK_TYPE = "household"
+# The word the title reader (catalog_types.classify) uses for "a small item I
+# recognise but can't type". It is replaced by the category's type, never kept.
+_TITLE_OTHER = "other"
 
-def type_from_category(path: Iterable[str | None]) -> str:
+
+def match_category(path: Iterable[str | None]) -> str | None:
     """The type a category path names ("Bookcases & shelving units > Bookcases"
-    -> "bookshelf"). Never None: a path no rule names is "other"."""
+    -> "bookshelf"), or None when no rule reads the path (an unknown language)."""
     names = [str(n).strip() for n in path if n and str(n).strip()]
     if names and names[0].lower() == _ROOT:
         names = names[1:]
+    if not names:
+        return None
     text = " > ".join(names).lower()
-    if not text:
-        return "other"
     # The leaf is the most specific part: try it alone first, then the whole path.
     leaf = names[-1].lower()
     for scope in (leaf, text):
         for name, pattern in _COMPILED:
             if pattern.search(scope):
                 return name
-    return "other"
+    return None
 
 
-def resolve_category_paths(
+def type_from_category(path: Iterable[str | None]) -> str:
+    """Like match_category, but never None: a path no rule reads is FALLBACK_TYPE."""
+    return match_category(path) or FALLBACK_TYPE
+
+
+def types_by_category_id(
     paths_by_country: dict[str, dict[str, list[str]]],
-    english_sites: Iterable[str],
-) -> dict[str, list[str]]:
-    """One path per category_id from {category_id: {country: path}}: the path from
-    an English-language site when there is one, else the first country's path
-    that the rules can read (some Gulf and Czech sites show English names too)."""
+    english_sites: Iterable[str] = (),
+) -> dict[str, str]:
+    """One type per category_id from {category_id: {country: path}}.
+
+    IKEA names the same category differently on each site ("Pendant lighting" on
+    one, "Pendants" on another, Malay on a third), so no single country's path is
+    reliable. Every country's path is read and the type most of them agree on
+    wins; paths no rule reads do not vote. A tie goes to the type the
+    `english_sites` give first. An id none of the paths can read is FALLBACK_TYPE."""
     english = tuple(english_sites)
-    resolved: dict[str, list[str]] = {}
+    result: dict[str, str] = {}
     for category_id, by_country in paths_by_country.items():
-        for country in english:
-            if country in by_country:
-                resolved[category_id] = by_country[country]
-                break
+        votes: Counter[str] = Counter()
+        first_english: dict[str, int] = {}
+        for country, path in by_country.items():
+            voted = match_category(path)
+            if voted is None:
+                continue
+            votes[voted] += 1
+            rank = english.index(country) if country in english else len(english)
+            first_english[voted] = min(first_english.get(voted, rank), rank)
+        if votes:
+            result[category_id] = max(votes, key=lambda t: (votes[t], -first_english[t]))
         else:
-            for country in sorted(by_country):
-                if type_from_category(by_country[country]) != "other":
-                    resolved[category_id] = by_country[country]
-                    break
-    return resolved
+            result[category_id] = FALLBACK_TYPE
+    return result
+
+
+def one_type_per_product(types: dict[str, str], rows: Iterable[dict]) -> dict[str, str]:
+    """Give every row of a product (same `group_key`: the product on every country's
+    site) the same type, the one most of its rows have. The category fills rows one
+    at a time and countries name a category differently, so without this the same
+    product could be a cabinet in one country and a bookshelf in another. A tie
+    goes to the type of the product's first row."""
+    members: dict[str, list[str]] = {}
+    for row in rows:
+        members.setdefault(str(row.get("group_key")), []).append(str(row.get("unique_id")))
+    result = dict(types)
+    for uids in members.values():
+        counts = Counter(types[uid] for uid in uids)
+        top = max(counts.values())
+        winner = next(types[uid] for uid in uids if counts[types[uid]] == top)
+        for uid in uids:
+            result[uid] = winner
+    return result
 
 
 def fill_missing_types(
     types: dict[str, str],
     rows: Iterable[dict],
-    paths_by_category_id: dict[str, list[str]],
+    type_by_category_id: dict[str, str],
 ) -> dict[str, str]:
     """`types` (title-derived, unique_id -> type) completed from the category:
-    every row without a type gets the type of its `category_id`'s English path,
-    or "other" when the id has none. Rows that already have a type are kept,
-    except "other" from the title reader: that only says the title matched a
-    small-item word, so the category may still name the product."""
+    every row without a type gets the type of its `category_id` (see
+    types_by_category_id), or FALLBACK_TYPE when the id is unknown. Rows that
+    already have a type are kept, except the title reader's "other": that only
+    says the title matched a small-item word, so the category may still name it.
+    The result never holds "other"."""
     filled = dict(types)
     for row in rows:
         uid = str(row.get("unique_id"))
-        if filled.get(uid, "other") != "other":
+        if filled.get(uid, _TITLE_OTHER) != _TITLE_OTHER:
             continue
-        path = paths_by_category_id.get(str(row.get("category_id")))
-        filled[uid] = type_from_category(path) if path else "other"
+        filled[uid] = type_by_category_id.get(str(row.get("category_id")), FALLBACK_TYPE)
     return filled

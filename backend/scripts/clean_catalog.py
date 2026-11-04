@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from app.services.catalog_attributes import extract_color_from_title, material_tags, materials_text
-from app.services.category_types import fill_missing_types, resolve_category_paths
-from app.services.furniture_types import types_by_unique_id
+from app.services.category_types import fill_missing_types, one_type_per_product, types_by_category_id
+from app.services.furniture_types import image_group_key, types_by_unique_id
 from app.services.measurements import extract_dims
 
 # Same symbols the notebook knew, for the currencies found in the data.
@@ -62,7 +62,7 @@ FIELDS = [
     'category', 'category_id', 'url', 'country_code', 'currency', 'final_price', 'thb_price',
     'width_cm', 'height_cm', 'depth_cm', 'length_cm', 'diameter_cm', 'has_dims', 'size_label',
     'material_tags', 'material_tag', 'is_wood', 'is_metal', 'is_fabric', 'is_plastic', 'is_glass',
-    'color_extracted', 'furniture_type', 'type_source', 'search_context',
+    'color_extracted', 'furniture_type', 'type_source', 'group_key', 'search_context',
 ]
 
 
@@ -168,8 +168,8 @@ def main() -> None:
     rows: list[dict[str, Any]] = []
     currency_log: list[dict[str, Any]] = []
     unread_names: Counter[str] = Counter()
-    # category_id -> English path. The id is the same on every country's site, so the
-    # English path of an id names the category of its Arabic or Hebrew products too.
+    # category_id -> {country: path}. The id is the same on every country's site, so what
+    # the paths of an id say names the category of its Arabic or Hebrew products too.
     category_paths: dict[str, dict[str, list[str]]] = {}
 
     for index, raw in enumerate(read_raw(args.raw_json), start=1):
@@ -190,7 +190,18 @@ def main() -> None:
     # Title first (it reads the product's own words), then the category fills what
     # the title could not name, so no product is left without a type.
     title_types = types_by_unique_id(rows)
-    types = fill_missing_types(title_types, rows, resolve_category_paths(category_paths, ENGLISH_SITES))
+    for row in rows:
+        # The same product on every country's site shares this key: dedupe or collapse by it.
+        row['group_key'] = image_group_key(row['main_image'], row['sku'])
+    types = fill_missing_types(title_types, rows, types_by_category_id(category_paths, ENGLISH_SITES))
+    types = one_type_per_product(types, rows)
+    # Every product says what it is. Fail loudly rather than write a catalog with a gap.
+    unnamed = [r for r in rows if types.get(r['unique_id'], 'other') == 'other']
+    if unnamed:
+        raise SystemExit(
+            f"{len(unnamed)} rows have no furniture_type, e.g. "
+            + ', '.join(f"{r['unique_id']} ({r['main_title'][:40]})" for r in unnamed[:5])
+        )
     for row in rows:
         row['furniture_type'] = types[row['unique_id']]
         row['type_source'] = 'title' if title_types.get(row['unique_id'], 'other') != 'other' else 'category'
@@ -209,9 +220,9 @@ def main() -> None:
         writer.writerows(unread_names.most_common())
 
     sized = sum(1 for r in rows if r['has_dims'])
-    typed = sum(1 for r in rows if r['furniture_type'] != 'other')
+    typed = sum(1 for r in rows if r['furniture_type'] != 'household')
     print(f'{len(rows)} rows kept (none dropped). With any size: {sized} ({sized / len(rows):.1%}).')
-    print(f'With a specific furniture_type (not "other"): {typed} ({typed / len(rows):.1%}). Unresolved currency: {len(currency_log)} rows.')
+    print(f'furniture_type set on every row; {len(rows) - typed} are the general "household" type. Unresolved currency: {len(currency_log)} rows.')
     print(f'Output in {args.out.resolve()}')
 
 

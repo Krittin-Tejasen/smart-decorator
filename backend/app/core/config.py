@@ -22,6 +22,11 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SUPABASE_KEY", "SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY"),
     )
 
+    # Which catalog table the backend reads. The rebuilt catalog is ikea_furniture_v2;
+    # switch to it together with PINECONE_INDEX_NAME, because the ids of the two
+    # tables (and of their indexes) differ.
+    catalog_table: str = "ikea_furniture"
+
     pinecone_api_key: str | None = None
     pinecone_index_name: str = "ikea-products"
     pinecone_cloud: str = "aws"

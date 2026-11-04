@@ -1,4 +1,4 @@
-"""Access to the product catalog stored in Supabase (source table: ikea_furniture)."""
+"""Access to the product catalog stored in Supabase (table: settings.catalog_table, ikea_furniture by default)."""
 
 import time
 from functools import lru_cache
@@ -8,7 +8,7 @@ from supabase import Client, create_client
 
 from app.core.config import settings
 
-TABLE_NAME = "ikea_furniture"
+TABLE_NAME = settings.catalog_table  # "ikea_furniture" unless CATALOG_TABLE says otherwise
 PAGE_SIZE = 1000
 
 
