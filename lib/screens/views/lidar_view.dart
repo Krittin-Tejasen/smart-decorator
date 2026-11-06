@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -26,8 +28,11 @@ class _LidarViewState extends State<LidarView> {
   List<Map<String, dynamic>> _allPoints3D = [];
 
   _ScanStep _step = _ScanStep.floor;
-  double? _ceilingY;   // world-space Y of the ceiling sample
+  double? _ceilingY;
   bool _isBusy = false;
+
+  // Holds the last captured photo so the user can retake before confirming.
+  ARCaptureState? _pendingCapture;
 
   void _onPlatformViewCreated(int viewId) {
     _channel = MethodChannel('com.smartdeco.app/ar_camera_$viewId');
@@ -59,16 +64,28 @@ class _LidarViewState extends State<LidarView> {
     }
   }
 
-  Future<void> _clearPoints() async {
-    await _channel?.invokeMethod('clearPoints');
-    setState(() {
-      _cornerCount = 0;
-      _lastDistance = 0;
-      _floorPlanPoints = [];
-      _allPoints3D = [];
-      _ceilingY = null;
-      _step = _ScanStep.floor;
-    });
+  Future<void> _undoLastPoint() async {
+    if (_channel == null || _cornerCount == 0) return;
+    try {
+      final result = await _channel!.invokeMethod<Map>('removeLastPoint');
+      if (result == null) return;
+      final rawPoints = result['allPoints'] as List?;
+      setState(() {
+        _cornerCount = (result['points'] as num?)?.toInt() ?? 0;
+        _lastDistance = (result['distance'] as num?)?.toDouble() ?? 0;
+        if (rawPoints != null) {
+          _allPoints3D = rawPoints
+              .map((p) => Map<String, dynamic>.from(p as Map))
+              .toList();
+          _floorPlanPoints = _allPoints3D.map((m) => Offset(
+                (m['x'] as num).toDouble(),
+                (m['z'] as num).toDouble(),
+              )).toList();
+        }
+      });
+    } on PlatformException catch (e) {
+      debugPrint('removeLastPoint error: ${e.message}');
+    }
   }
 
   // ── Step 2: mark ceiling height ─────────────────────────────────────────
@@ -91,27 +108,30 @@ class _LidarViewState extends State<LidarView> {
     }
   }
 
-  // ── Step 3: Photo — capture the upload photo in this same AR session,
-  // then the room snapshot, then navigate. ────────────────────────────────
+  // ── Step 3: Capture ─────────────────────────────────────────────────────
 
-  /// Shutter button: capture a photo (with depth, in this session) then finish.
-  Future<void> _capturePhotoAndFinish() async {
+  /// Shutter: capture photo in this session and show retake/confirm UI.
+  Future<void> _capturePhoto() async {
     if (_channel == null || _isBusy) return;
     setState(() => _isBusy = true);
-
-    ARCaptureState? captured;
     try {
       final raw = await _channel!.invokeMethod<Map>('capturePhoto');
-      if (raw != null) captured = ARCaptureState.fromMap(raw);
+      if (raw != null) {
+        setState(() => _pendingCapture = ARCaptureState.fromMap(raw));
+      }
     } on PlatformException catch (e) {
       debugPrint('capturePhoto error: ${e.message}');
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
     }
-
-    await _finish(captured: captured);
   }
 
-  /// "Skip" button: finish without a fresh photo (e.g. will pick from
-  /// gallery later) — size estimation just won't be available for this scan.
+  void _retakePhoto() => setState(() => _pendingCapture = null);
+
+  Future<void> _confirmPhotoAndFinish() async {
+    await _finish(captured: _pendingCapture);
+  }
+
   Future<void> _skipPhotoAndFinish() async {
     if (_isBusy) return;
     setState(() => _isBusy = true);
@@ -132,7 +152,6 @@ class _LidarViewState extends State<LidarView> {
     if (!mounted) return;
     setState(() => _isBusy = false);
 
-    // Compute floor average Y from 3-D points
     double? floorY;
     if (_allPoints3D.isNotEmpty) {
       final sumY = _allPoints3D.fold<double>(
@@ -167,8 +186,11 @@ class _LidarViewState extends State<LidarView> {
             ? 'Point at a floor corner, then tap +'
             : '$_cornerCount corner${_cornerCount > 1 ? 's' : ''} marked · point at next corner';
       case _ScanStep.height:
-        return 'Now point at the ceiling or top of a wall, then tap Mark Height';
+        return 'Point at the ceiling or top of a wall, then tap Mark Height';
       case _ScanStep.photo:
+        if (_pendingCapture != null) {
+          return 'Photo captured · confirm or retake';
+        }
         final h = _ceilingY != null && _allPoints3D.isNotEmpty
             ? (_ceilingY! -
                     _allPoints3D.fold<double>(
@@ -176,14 +198,14 @@ class _LidarViewState extends State<LidarView> {
                         _allPoints3D.length)
                 .abs()
             : 0.0;
-        return 'Height marked: ${_fmtDistance(h)} · Frame the room and tap the '
-            'shutter, or skip';
+        return 'Height: ${_fmtDistance(h)} · Rotate phone left, frame the room';
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final canMarkHeight = _cornerCount >= 3 && _step == _ScanStep.floor;
+    final isPhotoStep = _step == _ScanStep.photo;
 
     return Stack(
       children: [
@@ -196,18 +218,17 @@ class _LidarViewState extends State<LidarView> {
           ),
         ),
 
-        // Top instruction bar
+        // Top instruction bar — transparent in photo step
         Positioned(
           top: 0, left: 0, right: 0,
           child: Container(
-            color: Colors.black54,
+            color: isPhotoStep ? Colors.black.withValues(alpha: 0.28) : Colors.black54,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             child: SafeArea(
               bottom: false,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Step indicator dots
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -232,9 +253,42 @@ class _LidarViewState extends State<LidarView> {
                   const SizedBox(height: 8),
                   Text(
                     _instruction,
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      shadows: isPhotoStep
+                          ? const [Shadow(blurRadius: 6, color: Colors.black)]
+                          : null,
+                    ),
                     textAlign: TextAlign.center,
                   ),
+                  // Rotation guide hint for photo step
+                  if (isPhotoStep && _pendingCapture == null) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Transform.rotate(
+                          angle: math.pi / 2,
+                          child: const Icon(Icons.stay_current_portrait,
+                              color: Colors.cyanAccent, size: 16),
+                        ),
+                        const SizedBox(width: 6),
+                        const Icon(Icons.arrow_back_rounded,
+                            color: Colors.cyanAccent, size: 14),
+                        const SizedBox(width: 4),
+                        const Text(
+                          'Rotate left · camera button on right edge',
+                          style: TextStyle(
+                            color: Colors.cyanAccent,
+                            fontSize: 11,
+                            shadows: [Shadow(blurRadius: 4, color: Colors.black)],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -244,7 +298,7 @@ class _LidarViewState extends State<LidarView> {
         // Crosshair
         const Center(child: ScanCrosshair()),
 
-        // Last distance (bottom-left)
+        // Last distance (bottom-left) — floor step only
         if (_lastDistance > 0.01 && _step == _ScanStep.floor)
           Positioned(
             bottom: 104, left: 16,
@@ -270,26 +324,40 @@ class _LidarViewState extends State<LidarView> {
             ),
           ),
 
-        // Mini floor plan (bottom-right)
-        Positioned(
-          bottom: 104, right: 16,
-          child: FloorPlanMini(points: _floorPlanPoints),
-        ),
-
-        // Bottom control bar
-        Positioned(
-          bottom: 0, left: 0, right: 0,
-          child: Container(
-            color: Colors.black87,
-            padding: EdgeInsets.fromLTRB(
-                16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
-            child: _step == _ScanStep.floor
-                ? _floorBar(canMarkHeight)
-                : _step == _ScanStep.height
-                    ? _heightBar()
-                    : _photoBar(),
+        // Mini floor plan (bottom-right) — floor step only
+        if (_step == _ScanStep.floor)
+          Positioned(
+            bottom: 104, right: 16,
+            child: FloorPlanMini(points: _floorPlanPoints),
           ),
-        ),
+
+        // Bottom control bar — floor and height steps only
+        if (!isPhotoStep)
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: Container(
+              color: Colors.black87,
+              padding: EdgeInsets.fromLTRB(
+                  16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
+              child: _step == _ScanStep.floor
+                  ? _floorBar(canMarkHeight)
+                  : _heightBar(),
+            ),
+          ),
+
+        // ── Photo step overlays ────────────────────────────────────────────
+        // Right edge: shutter OR retake/confirm buttons
+        if (isPhotoStep)
+          Positioned(
+            right: 20,
+            top: MediaQuery.of(context).padding.top,
+            bottom: MediaQuery.of(context).padding.bottom,
+            child: Center(
+              child: _pendingCapture == null
+                  ? _shutterColumn()
+                  : _confirmColumn(),
+            ),
+          ),
       ],
     );
   }
@@ -298,10 +366,15 @@ class _LidarViewState extends State<LidarView> {
   Widget _floorBar(bool canMarkHeight) => Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
+          // Undo last point
           TextButton.icon(
-            onPressed: _cornerCount > 0 ? _clearPoints : null,
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white60, size: 20),
-            label: const Text('Reset', style: TextStyle(color: Colors.white60)),
+            onPressed: _cornerCount > 0 ? _undoLastPoint : null,
+            icon: Icon(Icons.undo_rounded,
+                color: _cornerCount > 0 ? Colors.white60 : Colors.white24,
+                size: 20),
+            label: Text('Undo',
+                style: TextStyle(
+                    color: _cornerCount > 0 ? Colors.white60 : Colors.white24)),
           ),
 
           // Add corner button
@@ -345,7 +418,6 @@ class _LidarViewState extends State<LidarView> {
             label: const Text('Back', style: TextStyle(color: Colors.white60)),
           ),
 
-          // Mark height button
           GestureDetector(
             onTap: _isBusy ? null : _markHeight,
             child: Container(
@@ -367,51 +439,114 @@ class _LidarViewState extends State<LidarView> {
             ),
           ),
 
-          const SizedBox(width: 72), // balance
+          const SizedBox(width: 72),
         ],
       );
 
-  // ── Bottom bar: step 3 (photo) ───────────────────────────────────────────
-  Widget _photoBar() => Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  // ── Photo step: right-edge shutter column ────────────────────────────────
+  Widget _shutterColumn() => Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          TextButton.icon(
-            onPressed: _isBusy
-                ? null
-                : () => setState(() => _step = _ScanStep.height),
-            icon: const Icon(Icons.arrow_back_rounded, color: Colors.white60, size: 20),
-            label: const Text('Redo Height',
-                style: TextStyle(color: Colors.white60, fontSize: 12)),
-          ),
-
-          // Shutter: capture photo (with depth, same session) and finish
+          // Redo height (small icon button above shutter)
           GestureDetector(
-            onTap: _isBusy ? null : _capturePhotoAndFinish,
+            onTap: _isBusy ? null : () => setState(() => _step = _ScanStep.height),
             child: Container(
-              width: 64, height: 64,
+              width: 44, height: 44,
               decoration: BoxDecoration(
-                color: Colors.greenAccent,
                 shape: BoxShape.circle,
+                color: Colors.black.withValues(alpha: 0.35),
+                border: Border.all(color: Colors.white38, width: 1.5),
+              ),
+              child: const Icon(Icons.height_rounded, color: Colors.white70, size: 20),
+            ),
+          ),
+          const SizedBox(height: 20),
+          // Shutter button
+          GestureDetector(
+            onTap: _isBusy ? null : _capturePhoto,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              width: 72, height: 72,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _isBusy
+                    ? Colors.white.withValues(alpha: 0.1)
+                    : Colors.white.withValues(alpha: 0.15),
+                border: Border.all(color: Colors.white, width: 4),
                 boxShadow: [BoxShadow(
-                    color: Colors.greenAccent.withValues(alpha: 0.45),
-                    blurRadius: 18, spreadRadius: 2)],
+                    color: Colors.white.withValues(alpha: 0.2),
+                    blurRadius: 12, spreadRadius: 1)],
+              ),
+              child: _isBusy
+                  ? const Padding(
+                      padding: EdgeInsets.all(18),
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.camera_alt_rounded,
+                      color: Colors.white, size: 32),
+            ),
+          ),
+          const SizedBox(height: 20),
+          // Skip / upload photo
+          GestureDetector(
+            onTap: _isBusy ? null : _skipPhotoAndFinish,
+            child: Container(
+              width: 44, height: 44,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.black.withValues(alpha: 0.35),
+                border: Border.all(color: Colors.white24, width: 1.5),
+              ),
+              child: const Icon(Icons.photo_library_outlined,
+                  color: Colors.white54, size: 20),
+            ),
+          ),
+        ],
+      );
+
+  // ── Photo step: retake / confirm column ──────────────────────────────────
+  Widget _confirmColumn() => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Use this photo
+          GestureDetector(
+            onTap: _isBusy ? null : _confirmPhotoAndFinish,
+            child: Container(
+              width: 72, height: 72,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.greenAccent.withValues(alpha: 0.85),
+                boxShadow: [BoxShadow(
+                    color: Colors.greenAccent.withValues(alpha: 0.4),
+                    blurRadius: 16, spreadRadius: 2)],
               ),
               child: _isBusy
                   ? const Padding(
                       padding: EdgeInsets.all(18),
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.black))
-                  : const Icon(Icons.camera_alt_rounded, color: Colors.black, size: 32),
+                  : const Icon(Icons.check_rounded, color: Colors.black, size: 36),
             ),
           ),
-
-          TextButton.icon(
-            onPressed: _isBusy ? null : _skipPhotoAndFinish,
-            icon: const Icon(Icons.photo_library_rounded,
-                color: Colors.white60, size: 16),
-            label: const Text('Upload Photo',
-                style: TextStyle(color: Colors.white60, fontSize: 12)),
+          const SizedBox(height: 16),
+          // Retake
+          GestureDetector(
+            onTap: _isBusy ? null : _retakePhoto,
+            child: Container(
+              width: 52, height: 52,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.black.withValues(alpha: 0.45),
+                border: Border.all(color: Colors.white54, width: 2),
+              ),
+              child: const Icon(Icons.replay_rounded, color: Colors.white70, size: 24),
+            ),
           ),
+          const SizedBox(height: 8),
+          const Text('Retake',
+              style: TextStyle(
+                  color: Colors.white54, fontSize: 10,
+                  shadows: [Shadow(blurRadius: 4, color: Colors.black)])),
         ],
       );
 }

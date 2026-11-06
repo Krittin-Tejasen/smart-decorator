@@ -166,6 +166,17 @@ def measure_furniture(
 
     angle = room_rotation_angle(floor_plan_points)
 
+    # The intrinsics (fx, fy, cx, cy) are in camera-image space; the depth
+    # map is a lower-resolution thumbnail of the same frustum.  Mask pixels
+    # must be mapped to camera-image coordinates before unprojection, not to
+    # depth-buffer coordinates — using depth-buffer coordinates directly with
+    # camera-image intrinsics produces a ~10–15× scale error and large angular
+    # offsets.  We derive camera image dimensions from the principal point
+    # (cx * 2 ≈ imageWidth; cy * 2 ≈ imageHeight), which is accurate to <1 px
+    # for every ARKit sensor tested.
+    cam_w = intrinsics[2] * 2.0  # cx * 2 ≈ imageWidth
+    cam_h = intrinsics[5] * 2.0  # cy * 2 ≈ imageHeight
+
     footprint_xz: list[tuple[float, float]] = []
     sample_world: list[np.ndarray] = []
     sample_mask_col: list[int] = []
@@ -180,7 +191,7 @@ def measure_furniture(
             continue
         bottom_row = int(rows_in_col.max())
 
-        # Scale this mask-space pixel into the depth map's own resolution.
+        # Scale mask-space pixel → depth-buffer space for the depth lookup.
         du = min(max(int(col / mw * dw), 0), dw - 1)
         dv = min(max(int(bottom_row / mh * dh), 0), dh - 1)
 
@@ -188,7 +199,10 @@ def measure_furniture(
         if depth_m <= _MIN_VALID_DEPTH_M:
             continue  # occluded or missing in the original scan
 
-        world = unproject_pixel(float(du), float(dv), depth_m, intrinsics, extrinsics)
+        # Scale mask-space pixel → camera-image space for correct unprojection.
+        img_u = col / mw * cam_w
+        img_v = bottom_row / mh * cam_h
+        world = unproject_pixel(img_u, img_v, depth_m, intrinsics, extrinsics)
         rx, rz = _rotate_xz(float(world[0]), float(world[2]), angle)
         footprint_xz.append((rx, rz))
         sample_world.append(world)
@@ -214,9 +228,11 @@ def measure_furniture(
     ref_distance = distances[ref_idx]
 
     rows_in_ref_col = np.where(mask[:, ref_col])[0]
-    pixel_height = int(rows_in_ref_col.max() - rows_in_ref_col.min()) + 1
+    pixel_height_mask = int(rows_in_ref_col.max() - rows_in_ref_col.min()) + 1
+    # Convert mask-space pixel height → camera-image pixels before applying fy.
+    pixel_height_cam = pixel_height_mask * (cam_h / mh)
     fy = intrinsics[4]
-    height_m = abs((pixel_height / fy) * ref_distance)
+    height_m = abs((pixel_height_cam / fy) * ref_distance)
 
     print(f"[sizing/lidar] -> OK: {len(footprint_xz)} samples, "
           f"W={width_m:.2f}m D={depth_m_out:.2f}m H={height_m:.2f}m")

@@ -43,6 +43,7 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
             guard let self else { return }
             switch call.method {
             case "addPoint":       self.handleAddPoint(result: result)
+            case "removeLastPoint":self.handleRemoveLastPoint(result: result)
             case "clearPoints":    self.clearAll(); result(nil)
             case "captureSnapshot":self.handleCaptureSnapshot(result: result)
             case "samplePoint":    self.handleSamplePoint(result: result)
@@ -103,6 +104,26 @@ class ARCameraNativeView: NSObject, FlutterPlatformView, ARSCNViewDelegate {
         if let prev = points.last { addLineMarker(from: prev, to: position) }
         points.append(position)
 
+        let dist: Float = points.count >= 2
+            ? simd_length(points.last! - points[points.count - 2]) : 0
+        let allPts = points.map { ["x": Double($0.x), "y": Double($0.y), "z": Double($0.z)] }
+        result(["points": points.count, "distance": Double(dist), "allPoints": allPts])
+    }
+
+    // MARK: - Remove last corner point (undo)
+
+    private func handleRemoveLastPoint(result: FlutterResult) {
+        guard !points.isEmpty else {
+            result(["points": 0, "distance": 0.0, "allPoints": [] as [[String: Double]]])
+            return
+        }
+        points.removeLast()
+        // Each addPoint appends 1 sphere always, plus 1 line when there was already a point.
+        // Undoing removes 2 nodes if this wasn't the first point, else 1 (just the sphere).
+        let nodesToRemove = points.isEmpty ? 1 : 2
+        for _ in 0..<min(nodesToRemove, sceneNodes.count) {
+            sceneNodes.removeLast().removeFromParentNode()
+        }
         let dist: Float = points.count >= 2
             ? simd_length(points.last! - points[points.count - 2]) : 0
         let allPts = points.map { ["x": Double($0.x), "y": Double($0.y), "z": Double($0.z)] }
