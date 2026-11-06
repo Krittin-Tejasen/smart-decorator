@@ -113,6 +113,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=7, help="--sample's random seed, for a reproducible subset")
     parser.add_argument("--limit", type=int, default=0, help="stop after this many NEW groups this run (0 = no cap)")
     parser.add_argument("--resume-from", dest="resume_from", help="skip group_keys already in this earlier output file")
+    parser.add_argument("--fresh", action="store_true", help="ignore any earlier measured_colours_*.jsonl (e.g. one made with an older, buggy catalog_colour.py) and measure everything again")
     args = parser.parse_args()
 
     BACKUP_DIR.mkdir(exist_ok=True)
@@ -136,6 +137,9 @@ def main() -> None:
         random.Random(args.seed).shuffle(keys)
         keys = sorted(keys[: args.sample])  # sorted again so a resumed/sampled run is still legible in order
         skip: set[str] = set()
+    elif args.fresh:
+        skip = set()
+        print("--fresh: ignoring any earlier measured_colours_*.jsonl, measuring every product again.")
     else:
         resume_path = Path(args.resume_from) if args.resume_from else None
         if resume_path and not resume_path.is_absolute():
