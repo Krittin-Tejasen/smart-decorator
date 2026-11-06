@@ -1,9 +1,14 @@
-"""Roll back `ikea_furniture` to a snapshot taken by backup_catalog.py.
+"""Roll back a Supabase catalog table to a snapshot taken by backup_catalog.py.
 
 Run from backend/:
     python -m scripts.restore_catalog --list                       # show snapshots
-    python -m scripts.restore_catalog --from <file>.jsonl --dry-run # preview, no writes
+    python -m scripts.restore_catalog --from <file>.jsonl           # dry-run (default), preview, no writes
     python -m scripts.restore_catalog --from <file>.jsonl --apply   # actually restore
+
+The table to restore is read from the snapshot's own `.manifest.json` (written
+by backup_catalog.py), so a v2 snapshot can never accidentally be replayed onto
+the v1 table or vice versa; pass --table to override only if you know what
+you're doing.
 
 --dry-run (the default) only reports, row by row, which columns differ between
 the live table and the snapshot, and never calls .upsert(). Nothing is written
@@ -21,10 +26,21 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.services.product_repo import TABLE_NAME, get_supabase_client
+from app.services.product_repo import get_supabase_client
 
 BACKUP_DIR = Path(__file__).resolve().parent.parent / "catalog_backups"
 BATCH_SIZE = 200
+
+
+def table_for_snapshot(snap_path: Path, override: str | None) -> str:
+    if override:
+        return override
+    manifest_path = snap_path.with_name(snap_path.name.removesuffix(".jsonl") + ".manifest.json")
+    if manifest_path.exists():
+        table = json.loads(manifest_path.read_text()).get("table")
+        if table:
+            return table
+    sys.exit(f"Could not find a table name in {manifest_path} — pass --table explicitly.")
 
 
 def load_snapshot(path: Path) -> list[dict[str, Any]]:
@@ -51,17 +67,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list", action="store_true", help="list available snapshots and exit")
     parser.add_argument("--from", dest="snapshot", help="snapshot .jsonl file (in catalog_backups/ or a full path)")
+    parser.add_argument("--table", help="override the table to restore into (default: read from the snapshot's own manifest)")
     parser.add_argument("--apply", action="store_true", help="actually write the restore (default is dry-run)")
     parser.add_argument("--sample", type=int, default=20, help="rows to diff in dry-run mode (default 20)")
     args = parser.parse_args()
 
     if args.list or not args.snapshot:
-        manifests = sorted(BACKUP_DIR.glob("ikea_furniture_*.manifest.json"))
+        manifests = sorted(
+            m for m in BACKUP_DIR.glob("*.manifest.json")
+            if not m.name.startswith("pinecone_metadata_") and "table" in json.loads(m.read_text())
+        )
         if not manifests:
-            print(f"No snapshots in {BACKUP_DIR}. Run backup_catalog.py first.")
+            print(f"No catalog table snapshots in {BACKUP_DIR}. Run backup_catalog.py first.")
         for m in manifests:
             info = json.loads(m.read_text())
-            print(f"  {info['file']:48s} {info['row_count']:6d} rows  taken {info['taken_at_utc']}")
+            print(f"  {info['file']:52s} table={info['table']:22s} {info['row_count']:6d} rows  taken {info['taken_at_utc']}")
         return
 
     snap_path = Path(args.snapshot)
@@ -70,7 +90,8 @@ def main() -> None:
     if not snap_path.exists():
         sys.exit(f"Snapshot not found: {snap_path}")
 
-    print(f"Loading snapshot {snap_path} ...")
+    table = table_for_snapshot(snap_path, args.table)
+    print(f"Loading snapshot {snap_path} (table: {table}) ...")
     rows = load_snapshot(snap_path)
     print(f"{len(rows)} rows in snapshot.")
 
@@ -82,7 +103,7 @@ def main() -> None:
         live_by_id = {}
         for i in range(0, len(sample_ids), 50):
             chunk = sample_ids[i : i + 50]
-            for row in client.table(TABLE_NAME).select("*").in_("unique_id", chunk).execute().data:
+            for row in client.table(table).select("*").in_("unique_id", chunk).execute().data:
                 live_by_id[row["unique_id"]] = row
         for snap_row in rows[:: max(1, len(rows) // args.sample)][: args.sample]:
             uid = snap_row["unique_id"]
@@ -91,7 +112,7 @@ def main() -> None:
         print("\nNothing was written. Re-run with --apply to restore for real.")
         return
 
-    print(f"\nAbout to overwrite {len(rows)} rows of '{TABLE_NAME}' with the snapshot's values.")
+    print(f"\nAbout to overwrite {len(rows)} rows of '{table}' with the snapshot's values.")
     confirm = input(f"Type the row count ({len(rows)}) to confirm: ").strip()
     if confirm != str(len(rows)):
         sys.exit("Row count didn't match — aborted, nothing written.")
@@ -102,7 +123,7 @@ def main() -> None:
         batch = rows[i : i + BATCH_SIZE]
         for attempt in range(5):
             try:
-                client.table(TABLE_NAME).upsert(batch, on_conflict="unique_id").execute()
+                client.table(table).upsert(batch, on_conflict="unique_id").execute()
                 break
             except Exception as exc:
                 print(f"  batch {i} failed ({type(exc).__name__}), retry {attempt + 1}/5")
