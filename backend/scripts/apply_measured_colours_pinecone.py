@@ -67,6 +67,11 @@ def build_group_key_to_color(groups: list[dict[str, Any]]) -> dict[str, dict[str
 
 
 def update_with_retries(index, vector_id: str, set_metadata: dict) -> None:
+    # Pinecone metadata values must be string/number/boolean/list-of-strings —
+    # None is rejected outright (not even as a way to unset a key), so a
+    # low_confidence group's absent colour is sent by omitting the key
+    # entirely rather than as null.
+    set_metadata = {k: v for k, v in set_metadata.items() if v is not None}
     last_exc = None
     for attempt in range(RETRIES):
         try:
