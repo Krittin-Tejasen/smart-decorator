@@ -7,16 +7,36 @@ cabinet's carcass rather than its door — see the 2026-10-17 audit: ~1/3 of
 "white"-labelled rows had a non-white front). Part of the colour clean-up
 plan (catalog-colour-cleanup branch); does not touch the live table or index.
 
-IKEA's `main_image` is a plain studio photo: in a sample of 24 products,
-including ones shot for outdoor furniture (patio sets, a greenhouse, outdoor
-storage), every single border pixel was flat white/near-white — never grass,
-sky or a lifestyle scene — so a simple flood fill from the image border is
-enough to separate the product from its background (verified 2026-10-31,
-bg_test.py in the project's scratchpad). The one real failure mode found:
-a white or pale, thin product (a white wire drying rack) blends into the white
-backdrop and the flood fill eats most of it, leaving too little of the item to
-measure — `measure_product_colour` reports that as `low_confidence` instead of
-guessing, and callers should keep the catalog's existing colour for those.
+IKEA's `main_image` is a plain, flat JPEG (no alpha channel — confirmed on the
+cached photos: 3-component JFIF, no transparency) of a studio photo: in a
+sample of 24 products, including ones shot for outdoor furniture (patio sets,
+a greenhouse, outdoor storage), every single border pixel was flat
+white/near-white — never grass, sky or a lifestyle scene (verified
+2026-10-31, bg_test.py in the project's scratchpad) — so a product's own
+pixels are simply whatever is NOT close in colour to that backdrop.
+
+An earlier version of this flood-filled from the image border instead of
+testing every pixel, on the idea that a product's own pale pixels shouldn't be
+treated as background just because they're a similar shade. That backfired
+badly: open shelving, chair legs, a table's underside — anything with a gap —
+shows backdrop *through* the gap, and that patch of backdrop doesn't touch the
+image border, so the flood fill never reached it and counted it as part of the
+product instead (found 2026-11-06 on IVAR shelving units: measured "white
+60-77%" against a catalog colour of "brown", because most of what the mask
+called "product" was daylight showing through the shelf, not the pine frame).
+Colour alone can't tell "backdrop seen through a gap" apart from "a pale bit of
+the product" either way — the flood fill's connectivity rule didn't solve that
+ambiguity, it just picked the wrong default, and far more products have gaps
+than have a stray pale highlight. Testing every pixel by colour distance alone
+fixes the gap case outright, at the cost of also excluding a product's own
+near-background-coloured patches (a white highlight, say) from the swatch
+measurement — an existing, accepted limitation, not a new one.
+
+The one real failure mode this doesn't fix: a white or pale, thin product (a
+white wire drying rack) blends into the white backdrop almost everywhere, not
+just at a gap, leaving too little of the item to measure —
+`measure_product_colour` reports that as `low_confidence` instead of guessing,
+and callers should keep the catalog's existing colour for those.
 
 Reuses feature_extraction.extract_swatches — the same CIELAB k-means swatch
 extractor already used on room cut-outs — so a product's measured colour and a
@@ -53,40 +73,23 @@ class ProductColourMeasurement:
 
 
 def isolate_foreground(image: Image.Image, bg_tolerance: int = _BG_TOLERANCE) -> np.ndarray:
-    """Boolean (H, W) mask of the product's own pixels: True where NOT part of
-    the background region that touches the image border. Flood fill from the
-    four edges over pixels close to the border's own (median) colour.
+    """Boolean (H, W) mask of the product's own pixels: True wherever a pixel's
+    colour is NOT close to the backdrop's (the border pixels' median colour).
+    Every pixel is judged independently by colour distance alone — not by
+    whether it is connected to the image border — specifically so that
+    backdrop showing through a gap in the product (open shelving, the space
+    between chair legs or under a table) is correctly treated as background
+    even though it sits in the middle of the photo.
 
     A product whose own colour also falls inside that tolerance (a white
     product on the white backdrop) is not distinguishable from the background
-    by colour alone and gets swallowed along with it — `measure_product_colour`
+    by colour alone and gets excluded along with it — `measure_product_colour`
     reports that case as `low_confidence` rather than measuring it wrong."""
     arr = np.asarray(image.convert("RGB")).astype(int)
-    h, w, _ = arr.shape
     border_px = np.concatenate([arr[0, :], arr[-1, :], arr[:, 0], arr[:, -1]])
     bg_color = np.median(border_px, axis=0)
     near_bg = np.abs(arr - bg_color).sum(axis=2) < bg_tolerance
-
-    # Flood fill from the border over `near_bg`, iteratively (no recursion
-    # limit issues on a few-hundred-pixel photo): repeatedly grow a frontier
-    # seeded at the border until it stops spreading.
-    reached = np.zeros((h, w), dtype=bool)
-    reached[0, :] |= near_bg[0, :]
-    reached[-1, :] |= near_bg[-1, :]
-    reached[:, 0] |= near_bg[:, 0]
-    reached[:, -1] |= near_bg[:, -1]
-    frontier = reached.copy()
-    while frontier.any():
-        grown = frontier.copy()
-        grown[1:, :] |= frontier[:-1, :]
-        grown[:-1, :] |= frontier[1:, :]
-        grown[:, 1:] |= frontier[:, :-1]
-        grown[:, :-1] |= frontier[:, 1:]
-        grown &= near_bg
-        frontier = grown & ~reached
-        reached |= grown
-
-    return ~reached
+    return ~near_bg
 
 
 def measure_product_colour(image: Image.Image) -> ProductColourMeasurement:

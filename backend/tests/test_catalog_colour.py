@@ -33,16 +33,19 @@ class IsolateForegroundTests(unittest.TestCase):
         self.assertFalse(fg[2, 2])            # corner, background
         self.assertAlmostEqual(fg.mean(), 0.36, delta=0.02)   # 60x60 of 100x100
 
-    def test_background_reaching_an_enclave_inside_the_product_is_not_foreground(self):
-        # a ring-shaped product with a hole in the middle that connects to the
-        # background through a slit (a chair back, a door frame...)
+    def test_an_enclosed_gap_inside_the_product_is_background_not_foreground(self):
+        # the real bug found 2026-11-06 on IVAR open shelving (measured "white
+        # 60-77%" against a catalog colour of "brown"): backdrop visible through
+        # a gap in the product — open shelving, the space between chair legs,
+        # under a table — must count as background even with NO path back to
+        # the image border, because by colour it simply IS the backdrop.
         img = Image.new("RGB", (100, 100), (255, 255, 255))
         d = ImageDraw.Draw(img)
-        d.rectangle((20, 20, 79, 79), fill=(80, 40, 20))
-        d.rectangle((35, 0, 45, 60), fill=(255, 255, 255))  # slit back to the border
+        d.rectangle((10, 10, 89, 89), fill=(110, 75, 50))     # a solid wood "frame"...
+        d.rectangle((30, 30, 69, 69), fill=(255, 255, 255))   # ...with an enclosed backdrop-coloured gap
         fg = cc.isolate_foreground(img)
-        self.assertFalse(fg[40, 40])          # inside the slit: reachable from the border
-        self.assertTrue(fg[70, 25])           # solid part of the ring
+        self.assertFalse(fg[50, 50])          # inside the gap: background, unreachable from the border or not
+        self.assertTrue(fg[15, 15])           # the solid frame itself is still the product
 
     def test_background_is_measured_from_the_border_not_assumed_white(self):
         img = studio_photo((100, 100), (255, 255, 255), (20, 20, 79, 79), bg_rgb=(10, 10, 10))
