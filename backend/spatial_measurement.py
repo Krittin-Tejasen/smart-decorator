@@ -180,6 +180,7 @@ def measure_furniture(
     footprint_xz: list[tuple[float, float]] = []
     sample_world: list[np.ndarray] = []
     sample_mask_col: list[int] = []
+    sample_floor_z_depth: list[float] = []  # Z-axis depth (not Euclidean) for height
 
     # Sample a bounded number of columns across the footprint — the depth
     # map's resolution is much lower than the mask's, so every column isn't
@@ -207,6 +208,7 @@ def measure_furniture(
         footprint_xz.append((rx, rz))
         sample_world.append(world)
         sample_mask_col.append(int(col))
+        sample_floor_z_depth.append(depth_m)  # ARKit depth map stores Z depth
 
     if len(footprint_xz) < _MIN_VALID_SAMPLES:
         print(f"[sizing/lidar] -> None: only {len(footprint_xz)} valid depth samples "
@@ -219,20 +221,54 @@ def measure_furniture(
     width_m = abs(max(xs) - min(xs))
     depth_m_out = abs(max(zs) - min(zs))
 
-    # Height via similar triangles, using the sample closest to the camera
-    # (shortest distance = most reliable depth reading) as the reference.
+    # Height: pick several reference columns (closest to camera center) and
+    # average their height estimates for robustness.
     cam_pos = camera_position(extrinsics)
     distances = [float(np.linalg.norm(w - cam_pos)) for w in sample_world]
-    ref_idx = int(np.argmin(distances))
-    ref_col = sample_mask_col[ref_idx]
-    ref_distance = distances[ref_idx]
+    # Use up to 3 closest columns to average out noise
+    n_ref = min(3, len(distances))
+    ref_indices = sorted(range(len(distances)), key=lambda i: distances[i])[:n_ref]
 
-    rows_in_ref_col = np.where(mask[:, ref_col])[0]
-    pixel_height_mask = int(rows_in_ref_col.max() - rows_in_ref_col.min()) + 1
-    # Convert mask-space pixel height → camera-image pixels before applying fy.
-    pixel_height_cam = pixel_height_mask * (cam_h / mh)
-    fy = intrinsics[4]
-    height_m = abs((pixel_height_cam / fy) * ref_distance)
+    heights: list[float] = []
+    for ref_idx in ref_indices:
+        ref_col = sample_mask_col[ref_idx]
+        # Use the Z-axis depth from the depth map — NOT the Euclidean distance.
+        # unproject_pixel expects depth along the camera's -Z axis; Euclidean
+        # distance differs by up to 10-15% for off-centre pixels and would
+        # stretch height estimates by that margin.
+        ref_floor_depth = sample_floor_z_depth[ref_idx]
+
+        rows_in_ref_col = np.where(mask[:, ref_col])[0]
+        ref_u_cam = ref_col / mw * cam_w
+        ref_v_bot_cam = float(rows_in_ref_col.max()) / mh * cam_h
+        ref_v_top_cam = float(rows_in_ref_col.min()) / mh * cam_h
+
+        # Bottom point: floor surface at the base of the furniture.
+        P_bot_3d = unproject_pixel(ref_u_cam, ref_v_bot_cam, ref_floor_depth,
+                                   intrinsics, extrinsics)
+
+        # Top point: try to use the actual surface depth from the LiDAR depth
+        # map at the top of the mask.  LiDAR scans the furniture surface, so
+        # the top pixel should have a valid, shallower depth than the floor.
+        # Fall back to the floor depth if the top pixel has no valid reading
+        # (e.g. the furniture top is out of the LiDAR range or unlit).
+        top_du = min(max(int(ref_col / mw * dw), 0), dw - 1)
+        top_dv = min(max(int(rows_in_ref_col.min() / mh * dh), 0), dh - 1)
+        top_depth_m = float(depth[top_dv, top_du])
+        use_top_depth = top_depth_m > _MIN_VALID_DEPTH_M and top_depth_m < ref_floor_depth
+
+        P_top_3d = unproject_pixel(
+            ref_u_cam, ref_v_top_cam,
+            top_depth_m if use_top_depth else ref_floor_depth,
+            intrinsics, extrinsics,
+        )
+        h = abs(float(P_top_3d[1]) - float(P_bot_3d[1]))
+        if h > 0.01:  # discard degenerate estimates
+            heights.append(h)
+
+    if not heights:
+        return None
+    height_m = float(np.median(heights))
 
     print(f"[sizing/lidar] -> OK: {len(footprint_xz)} samples, "
           f"W={width_m:.2f}m D={depth_m_out:.2f}m H={height_m:.2f}m")

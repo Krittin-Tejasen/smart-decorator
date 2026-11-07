@@ -71,7 +71,13 @@ def estimate_depth(
 
     pipe = _get_pipeline()
     result = pipe(infer_img)
-    depth_arr: np.ndarray = np.array(result["depth"], dtype=np.float32)
+    # result["predicted_depth"] is the metric depth tensor (metres).
+    # result["depth"] is a normalized PIL image (0-255) for visualization only —
+    # treating it as metres would give depths of 0-255 m instead of 0-10 m.
+    pt = result["predicted_depth"]
+    depth_arr: np.ndarray = (
+        pt.squeeze().numpy() if hasattr(pt, "numpy") else np.asarray(pt).squeeze()
+    ).astype(np.float32)
 
     # Resize back to original dimensions so masks from the full-res segmentation
     # align correctly when spatial_measurement.py scales pixel coordinates.

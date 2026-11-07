@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -220,7 +222,9 @@ class _LidarViewState extends State<LidarView> {
         Positioned(
           top: 0, left: 0, right: 0,
           child: Container(
-            color: isPhotoStep ? Colors.black.withValues(alpha: 0.28) : Colors.black54,
+            color: (isPhotoStep && _pendingCapture == null)
+                ? Colors.black.withValues(alpha: 0.28)
+                : Colors.black54,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             child: SafeArea(
               bottom: false,
@@ -267,11 +271,11 @@ class _LidarViewState extends State<LidarView> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.rotate_right,
+                        const Icon(Icons.rotate_left,
                             color: Colors.cyanAccent, size: 16),
                         const SizedBox(width: 6),
                         const Text(
-                          'Rotate phone right for wider view',
+                          'Rotate phone left for wider view',
                           style: TextStyle(
                             color: Colors.cyanAccent,
                             fontSize: 11,
@@ -323,11 +327,26 @@ class _LidarViewState extends State<LidarView> {
             child: FloorPlanMini(points: _floorPlanPoints),
           ),
 
-        // Bottom control bar — all steps; transparent background in photo step
+        // Photo preview: covers the AR view after the user takes a shot
+        if (isPhotoStep && _pendingCapture != null)
+          Positioned.fill(
+            child: Container(
+              color: Colors.black,
+              child: Image.file(
+                File(_pendingCapture!.imagePath),
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+
+        // Bottom control bar
         Positioned(
           bottom: 0, left: 0, right: 0,
           child: Container(
-            color: isPhotoStep ? Colors.transparent : Colors.black87,
+            // Opaque over preview; transparent over live AR in photo step
+            color: (isPhotoStep && _pendingCapture == null)
+                ? Colors.transparent
+                : Colors.black87,
             padding: EdgeInsets.fromLTRB(
                 16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
             child: _step == _ScanStep.floor

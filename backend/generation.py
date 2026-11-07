@@ -926,8 +926,13 @@ async def run_generate_room(
             try:
                 from depth_estimation import estimate_depth
                 progress("segment", "Estimating depth from photo", 0.95)
+                # Run depth on the GENERATED image (gen_bytes), not the original
+                # upload (image_bytes).  The masks come from the generated image, so
+                # the depth must describe the same scene — using the original photo's
+                # depth reads wall/floor depths at spots where the AI placed new
+                # furniture, producing systematically oversized measurements.
                 est_png_b64, est_min_m, est_max_m = await asyncio.get_event_loop().run_in_executor(
-                    None, estimate_depth, image_bytes
+                    None, estimate_depth, gen_bytes
                 )
                 plan_points = json.loads(floor_plan_points)
                 for item in seg_result.items:
