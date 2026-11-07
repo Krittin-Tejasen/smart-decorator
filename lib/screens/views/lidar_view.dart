@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -269,17 +267,11 @@ class _LidarViewState extends State<LidarView> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Transform.rotate(
-                          angle: math.pi / 2,
-                          child: const Icon(Icons.stay_current_portrait,
-                              color: Colors.cyanAccent, size: 16),
-                        ),
+                        const Icon(Icons.rotate_right,
+                            color: Colors.cyanAccent, size: 16),
                         const SizedBox(width: 6),
-                        const Icon(Icons.arrow_back_rounded,
-                            color: Colors.cyanAccent, size: 14),
-                        const SizedBox(width: 4),
                         const Text(
-                          'Rotate left · camera button on right edge',
+                          'Rotate phone right for wider view',
                           style: TextStyle(
                             color: Colors.cyanAccent,
                             fontSize: 11,
@@ -331,33 +323,22 @@ class _LidarViewState extends State<LidarView> {
             child: FloorPlanMini(points: _floorPlanPoints),
           ),
 
-        // Bottom control bar — floor and height steps only
-        if (!isPhotoStep)
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            child: Container(
-              color: Colors.black87,
-              padding: EdgeInsets.fromLTRB(
-                  16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
-              child: _step == _ScanStep.floor
-                  ? _floorBar(canMarkHeight)
-                  : _heightBar(),
-            ),
+        // Bottom control bar — all steps; transparent background in photo step
+        Positioned(
+          bottom: 0, left: 0, right: 0,
+          child: Container(
+            color: isPhotoStep ? Colors.transparent : Colors.black87,
+            padding: EdgeInsets.fromLTRB(
+                16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
+            child: _step == _ScanStep.floor
+                ? _floorBar(canMarkHeight)
+                : _step == _ScanStep.height
+                    ? _heightBar()
+                    : _pendingCapture == null
+                        ? _photoBar()
+                        : _confirmBar(),
           ),
-
-        // ── Photo step overlays ────────────────────────────────────────────
-        // Right edge: shutter OR retake/confirm buttons
-        if (isPhotoStep)
-          Positioned(
-            right: 20,
-            top: MediaQuery.of(context).padding.top,
-            bottom: MediaQuery.of(context).padding.bottom,
-            child: Center(
-              child: _pendingCapture == null
-                  ? _shutterColumn()
-                  : _confirmColumn(),
-            ),
-          ),
+        ),
       ],
     );
   }
@@ -443,25 +424,17 @@ class _LidarViewState extends State<LidarView> {
         ],
       );
 
-  // ── Photo step: right-edge shutter column ────────────────────────────────
-  Widget _shutterColumn() => Column(
-        mainAxisSize: MainAxisSize.min,
+  // ── Bottom bar: step 3 (photo) — transparent ────────────────────────────
+  Widget _photoBar() => Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Redo height (small icon button above shutter)
-          GestureDetector(
-            onTap: _isBusy ? null : () => setState(() => _step = _ScanStep.height),
-            child: Container(
-              width: 44, height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.black.withValues(alpha: 0.35),
-                border: Border.all(color: Colors.white38, width: 1.5),
-              ),
-              child: const Icon(Icons.height_rounded, color: Colors.white70, size: 20),
-            ),
+          TextButton.icon(
+            onPressed: _isBusy ? null : () => setState(() => _step = _ScanStep.height),
+            icon: const Icon(Icons.arrow_back_rounded, color: Colors.white60, size: 20),
+            label: const Text('Redo Height',
+                style: TextStyle(color: Colors.white60, fontSize: 12)),
           ),
-          const SizedBox(height: 20),
-          // Shutter button
+          // Shutter — glass style to match transparent bar
           GestureDetector(
             onTap: _isBusy ? null : _capturePhoto,
             child: AnimatedContainer(
@@ -473,9 +446,6 @@ class _LidarViewState extends State<LidarView> {
                     ? Colors.white.withValues(alpha: 0.1)
                     : Colors.white.withValues(alpha: 0.15),
                 border: Border.all(color: Colors.white, width: 4),
-                boxShadow: [BoxShadow(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    blurRadius: 12, spreadRadius: 1)],
               ),
               child: _isBusy
                   ? const Padding(
@@ -486,39 +456,36 @@ class _LidarViewState extends State<LidarView> {
                       color: Colors.white, size: 32),
             ),
           ),
-          const SizedBox(height: 20),
-          // Skip / upload photo
-          GestureDetector(
-            onTap: _isBusy ? null : _skipPhotoAndFinish,
-            child: Container(
-              width: 44, height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.black.withValues(alpha: 0.35),
-                border: Border.all(color: Colors.white24, width: 1.5),
-              ),
-              child: const Icon(Icons.photo_library_outlined,
-                  color: Colors.white54, size: 20),
-            ),
+          TextButton.icon(
+            onPressed: _isBusy ? null : _skipPhotoAndFinish,
+            icon: const Icon(Icons.photo_library_outlined,
+                color: Colors.white60, size: 16),
+            label: const Text('Upload Photo',
+                style: TextStyle(color: Colors.white60, fontSize: 12)),
           ),
         ],
       );
 
-  // ── Photo step: retake / confirm column ──────────────────────────────────
-  Widget _confirmColumn() => Column(
-        mainAxisSize: MainAxisSize.min,
+  // ── Bottom bar: step 3 after capture — retake or confirm ────────────────
+  Widget _confirmBar() => Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Use this photo
+          TextButton.icon(
+            onPressed: _isBusy ? null : _retakePhoto,
+            icon: const Icon(Icons.replay_rounded, color: Colors.white60, size: 20),
+            label: const Text('Retake',
+                style: TextStyle(color: Colors.white60)),
+          ),
           GestureDetector(
             onTap: _isBusy ? null : _confirmPhotoAndFinish,
             child: Container(
               width: 72, height: 72,
               decoration: BoxDecoration(
+                color: Colors.greenAccent,
                 shape: BoxShape.circle,
-                color: Colors.greenAccent.withValues(alpha: 0.85),
                 boxShadow: [BoxShadow(
-                    color: Colors.greenAccent.withValues(alpha: 0.4),
-                    blurRadius: 16, spreadRadius: 2)],
+                    color: Colors.greenAccent.withValues(alpha: 0.45),
+                    blurRadius: 18, spreadRadius: 2)],
               ),
               child: _isBusy
                   ? const Padding(
@@ -528,25 +495,7 @@ class _LidarViewState extends State<LidarView> {
                   : const Icon(Icons.check_rounded, color: Colors.black, size: 36),
             ),
           ),
-          const SizedBox(height: 16),
-          // Retake
-          GestureDetector(
-            onTap: _isBusy ? null : _retakePhoto,
-            child: Container(
-              width: 52, height: 52,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.black.withValues(alpha: 0.45),
-                border: Border.all(color: Colors.white54, width: 2),
-              ),
-              child: const Icon(Icons.replay_rounded, color: Colors.white70, size: 24),
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text('Retake',
-              style: TextStyle(
-                  color: Colors.white54, fontSize: 10,
-                  shadows: [Shadow(blurRadius: 4, color: Colors.black)])),
+          const SizedBox(width: 80), // visual balance
         ],
       );
 }
