@@ -115,6 +115,41 @@ class PipelineStageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([s for s, _, _ in seen][-2:], ["match", "segment"])
         self.assertEqual(result["furniture_segments"], {"items": [], "total": 0})
 
+    async def test_gemini_gets_hints_from_a_separate_vision_call(self):
+        # Tried getting the furniture list from the SAME call that renders
+        # the image (both image and text parts in one generateContent
+        # response) - confirmed by real testing that gemini-3.1-flash-image
+        # never sends the text part back, so that idea was dropped. Back to
+        # the separate furniture_hints.detect_added_furniture call.
+        fake_seg = SimpleNamespace(items=[], model_dump=lambda: {"items": [], "total": 0})
+        detect = AsyncMock(return_value={"sofa": 1, "lamp": 2})
+        segment_spy = AsyncMock(return_value=fake_seg)
+        with COMPOSE, \
+                patch.object(generation, "generate_with_gemini", new=AsyncMock(return_value=png_data_url())), \
+                patch.object(generation, "critique_generated_image", new=AsyncMock(return_value=(True, "ok"))), \
+                patch.object(generation, "detect_added_furniture", new=detect), \
+                patch.object(generation, "run_segmentation", new=segment_spy):
+            await self.run_pipeline(provider="gemini", segment=True)
+
+        detect.assert_awaited_once()
+        segment_spy.assert_awaited_once()
+        self.assertEqual(segment_spy.await_args.kwargs.get("hints"), {"sofa": 1, "lamp": 2})
+
+    async def test_non_gemini_providers_never_get_hints(self):
+        # Muse (OpenRouter) and Replicate are dedicated image endpoints with
+        # no text channel - no separate call is worth making for them either.
+        fake_seg = SimpleNamespace(items=[], model_dump=lambda: {"items": [], "total": 0})
+        detect = AsyncMock()
+        segment_spy = AsyncMock(return_value=fake_seg)
+        with COMPOSE, \
+                patch.object(generation, "generate_with_mock", new=AsyncMock(return_value=png_data_url())), \
+                patch.object(generation, "detect_added_furniture", new=detect), \
+                patch.object(generation, "run_segmentation", new=segment_spy):
+            await self.run_pipeline(provider="mock", segment=True)
+
+        detect.assert_not_awaited()
+        self.assertEqual(segment_spy.await_args.kwargs.get("hints"), {})
+
     async def test_unreadable_image_fails_before_any_stage(self):
         seen = []
         with self.assertRaises(HTTPException) as ctx:

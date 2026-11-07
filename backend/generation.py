@@ -822,11 +822,15 @@ async def run_generate_room(
         progress("segment", "Detecting furniture in the design", 0.93)
         _, encoded = generated_image.split(",", 1)
         gen_bytes = base64.b64decode(encoded)
-        # What the generated photo itself shows, in the closed vocabulary
-        # (not the composer's plan - the image model doesn't always follow
-        # it exactly). {} on any failure, which run_segmentation treats as
-        # "no hint" and falls back to its full static vocabulary.
-        hints = await detect_added_furniture(gen_bytes, "image/png")
+        # Tried asking Gemini's image model to also return the furniture list
+        # in the SAME call that renders the image (same generateContent
+        # request, image + text parts) - confirmed by real testing that
+        # gemini-3.1-flash-image never includes the text part, only the
+        # image, so that path was removed. Back to a separate vision call,
+        # and only for "gemini": Replicate/OpenRouter (e.g. Muse) are
+        # dedicated image endpoints with no text channel at all, so for them
+        # segmentation always falls back to its full static vocabulary.
+        hints = await detect_added_furniture(gen_bytes, "image/png") if provider == "gemini" else {}
         seg_result = await run_segmentation(gen_bytes, "image/png", hints=hints)
         response["furniture_segments"] = seg_result.model_dump()
 
