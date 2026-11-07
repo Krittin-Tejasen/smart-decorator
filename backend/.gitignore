@@ -15,3 +15,8 @@ compare/
 
 # Local progress/snapshots of the scripts/ catalog jobs
 scripts/.*.json
+
+# Catalog snapshots (backup_catalog.py/backup_pinecone.py) and cached product
+# photos (measure_catalog_colours.py) — gigabytes of local working data, not
+# meant to ever be committed.
+catalog_backups/
