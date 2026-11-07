@@ -106,6 +106,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 from pydantic import BaseModel
 
+from app.services.furniture_types import labels_for_type
 from feature_extraction import (
     ColorSwatch,
     EnrichInput,
@@ -147,6 +148,37 @@ _FURNITURE_PROMPT = (
 _VOCAB: tuple[str, ...] = tuple(p.strip() for p in _FURNITURE_PROMPT.split(".") if p.strip())
 _VOCAB_SET = frozenset(_VOCAB)
 _MAX_PHRASE_WORDS = max(len(p.split()) for p in _VOCAB)
+
+# Always scanned for regardless of hints: soft furnishings/decoys that
+# merge_parts_into_hosts, real_openings etc. depend on, plus a catch-all for
+# whatever a hint list missed.
+_ALWAYS_IN_VOCAB = (
+    "pillow", "cushion", "throw pillow", "blanket",
+    "doorway", "door", "window", "decoration",
+)
+
+
+def _build_dynamic_vocab(hints: dict[str, int] | None) -> str | None:
+    """A per-image Grounding DINO prompt built from generation-time hints
+    (furniture_hints.detect_added_furniture's guess at what the room-
+    generation step actually put in the photo) instead of always scanning
+    for every type in the static vocabulary - fewer candidate phrases means
+    less label confusion between similar classes.
+
+    Only labels already in `_VOCAB_SET` are used, so every existing
+    label-keyed heuristic below (families, min-area overrides, mask-only
+    labels...) still applies unchanged. Returns None (-> the full static
+    `_FURNITURE_PROMPT`) when there are no hints, so a direct
+    /segment-furniture call (no generation step, no hints) is unaffected.
+    """
+    if not hints:
+        return None
+    labels = list(_ALWAYS_IN_VOCAB)
+    for furniture_type in hints:
+        for label in labels_for_type(furniture_type):
+            if label in _VOCAB_SET and label not in labels:
+                labels.append(label)
+    return " . ".join(labels) + " ."
 
 # Architecture / fixtures that must never show up as a shoppable card — whether
 # they came from the DINO decoys above or from Gemini's "every item" answer.
@@ -256,6 +288,11 @@ class SegmentationResult(BaseModel):
     # used to fail silently and fall back to a weaker detector, which hid a
     # real bug for weeks — surface it instead.
     fallback_reason: str | None = None
+    # What furniture_hints.detect_added_furniture guessed the generated photo
+    # shows (None when run_segmentation got no hints, e.g. a direct
+    # /segment-furniture call). Kept for comparison against `counts`, not
+    # currently used to filter/drop a detection.
+    generation_hints: dict[str, int] | None = None
 
 
 # ── Image / colour helpers ──────────────────────────────────────────────────
@@ -829,12 +866,12 @@ _OPENING_PROMPT = "doorway . open door ."
 _OPENING_BOX_THRESHOLD = 0.25
 
 
-def _detect_with_grounding_dino_local(img: Image.Image) -> list[dict]:
+def _detect_with_grounding_dino_local(img: Image.Image, vocab: str | None = None) -> list[dict]:
     openings = [
         {**d, "label": "doorway"}
         for d in _run_grounding_dino(img, _OPENING_PROMPT, _OPENING_BOX_THRESHOLD)
     ]
-    return _run_grounding_dino(img, _FURNITURE_PROMPT) + openings
+    return _run_grounding_dino(img, vocab or _FURNITURE_PROMPT) + openings
 
 
 def _run_grounding_dino(img: Image.Image, prompt: str, box_threshold: float | None = None) -> list[dict]:
@@ -1392,13 +1429,20 @@ async def _enrich_items(items: list[FurnitureItem]) -> None:
             apply_enrichment(item, enriched[item.id])
 
 
-async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationResult:
+async def run_segmentation(
+    image_bytes: bytes, mime_type: str, hints: dict[str, int] | None = None
+) -> SegmentationResult:
     """
     Public helper — also called from main.py's /generate-room when segment=true.
 
     Runs Grounding DINO (boxes) → SAM 2 (masks) locally, falling back to
     Gemini Vision (boxes only) if the local dependencies/checkpoint aren't
     set up yet, or if either local stage fails at runtime.
+
+    `hints` ({furniture_type: count}, from furniture_hints.detect_added_furniture
+    on the same image) narrows Grounding DINO's text prompt to just the types
+    expected to be there instead of the full static vocabulary — see
+    `_build_dynamic_vocab`. None/empty falls back to the full vocabulary.
     """
     img = Image.open(BytesIO(image_bytes)).convert("RGB")
     W, H = img.size
@@ -1406,9 +1450,10 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
     method = "grounding_dino_sam2"
     fallback_reason: str | None = None
     mask_imgs: list[Image.Image | None] = []
+    vocab = _build_dynamic_vocab(hints)
 
     try:
-        raw = await asyncio.to_thread(_detect_with_grounding_dino_local, img)
+        raw = await asyncio.to_thread(_detect_with_grounding_dino_local, img, vocab)
         boxes_px = [det["box"] for det in raw]
         labels = [det["label"] for det in raw]
         mask_imgs = (
@@ -1463,6 +1508,7 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
         total=len(items),
         method=method,
         fallback_reason=fallback_reason,
+        generation_hints=hints or None,
     )
     _persist_result(result)
     return result

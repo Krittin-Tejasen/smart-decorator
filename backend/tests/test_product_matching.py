@@ -97,6 +97,18 @@ class LabelToTypeTests(unittest.TestCase):
         self.assertEqual(ft.label_to_type("throw blanket"), None)
         self.assertEqual(ft.label_to_type(None), None)
 
+    def test_labels_for_type_round_trips_with_label_to_type(self):
+        for t in ft.FURNITURE_TYPES:
+            for label in ft.labels_for_type(t):
+                self.assertEqual(ft.label_to_type(label), t)
+
+    def test_labels_for_type_examples(self):
+        self.assertEqual(
+            set(ft.labels_for_type("lamp")),
+            {"floor lamp", "table lamp", "pendant lamp", "chandelier", "lamp"},
+        )
+        self.assertEqual(ft.labels_for_type("not_a_real_type"), ())
+
 
 class GroupTypeTests(unittest.TestCase):
     def test_a_group_takes_the_majority_type_of_its_titles(self):

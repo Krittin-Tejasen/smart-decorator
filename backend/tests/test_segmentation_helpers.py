@@ -97,6 +97,37 @@ class LabelTests(unittest.TestCase):
         self.assertNotIn("cabinetfloor lamp", seg._VOCAB_SET)
 
 
+class DynamicVocabTests(unittest.TestCase):
+    def test_no_hints_falls_back_to_the_static_prompt(self):
+        self.assertIsNone(seg._build_dynamic_vocab(None))
+        self.assertIsNone(seg._build_dynamic_vocab({}))
+
+    def test_hinted_types_bring_in_their_labels(self):
+        vocab = seg._build_dynamic_vocab({"sofa": 1, "lamp": 2})
+        for label in ("sofa", "couch", "floor lamp", "table lamp", "pendant lamp", "chandelier"):
+            self.assertIn(label, vocab)
+        # Not hinted, so not pulled in.
+        self.assertNotIn("wardrobe", vocab)
+        self.assertNotIn("bed", vocab)
+
+    def test_always_in_vocab_labels_are_present_regardless_of_hints(self):
+        vocab = seg._build_dynamic_vocab({"sofa": 1})
+        for label in seg._ALWAYS_IN_VOCAB:
+            self.assertIn(label, vocab)
+
+    def test_a_type_with_no_segmentation_label_adds_nothing_extra(self):
+        # "ottoman" is in FURNITURE_TYPES but not every type has to be — this
+        # must not raise even for a type the vocabulary doesn't name.
+        vocab = seg._build_dynamic_vocab({"vase": 1})
+        self.assertIn("vase", vocab)
+
+    def test_output_is_well_formed_for_grounding_dino(self):
+        vocab = seg._build_dynamic_vocab({"sofa": 1})
+        self.assertTrue(vocab.rstrip().endswith("."))
+        for phrase in vocab.rstrip(" .").split(" . "):
+            self.assertIn(phrase, seg._VOCAB_SET)
+
+
 class DedupeTests(unittest.TestCase):
     @staticmethod
     def det(label, conf, box):

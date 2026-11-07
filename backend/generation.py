@@ -30,6 +30,7 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 
+from furniture_hints import detect_added_furniture
 from segmentation import run_segmentation
 
 router = APIRouter(tags=["generation"])
@@ -821,7 +822,12 @@ async def run_generate_room(
         progress("segment", "Detecting furniture in the design", 0.93)
         _, encoded = generated_image.split(",", 1)
         gen_bytes = base64.b64decode(encoded)
-        seg_result = await run_segmentation(gen_bytes, "image/png")
+        # What the generated photo itself shows, in the closed vocabulary
+        # (not the composer's plan - the image model doesn't always follow
+        # it exactly). {} on any failure, which run_segmentation treats as
+        # "no hint" and falls back to its full static vocabulary.
+        hints = await detect_added_furniture(gen_bytes, "image/png")
+        seg_result = await run_segmentation(gen_bytes, "image/png", hints=hints)
         response["furniture_segments"] = seg_result.model_dump()
 
     # Nothing is stored here. A generation only becomes a saved room when the

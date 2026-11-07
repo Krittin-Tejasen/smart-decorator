@@ -162,6 +162,22 @@ def label_to_type(label: str | None) -> str | None:
     return classify_title(key)
 
 
+# Reverse of _LABEL_TO_TYPE: canonical type -> every segmentation label that
+# maps to it. Lets a caller that only knows the type (e.g. a generation-time
+# hint like "this room got a sofa and a nightstand") build a detector
+# vocabulary from a handful of labels instead of the whole vocabulary.
+_TYPE_TO_LABELS: dict[str, tuple[str, ...]] = {}
+for _label, _type in _LABEL_TO_TYPE.items():
+    _TYPE_TO_LABELS.setdefault(_type, []).append(_label)
+_TYPE_TO_LABELS = {k: tuple(v) for k, v in _TYPE_TO_LABELS.items()}
+
+
+def labels_for_type(furniture_type: str) -> tuple[str, ...]:
+    """Segmentation labels that map to this canonical type, e.g. "lamp" ->
+    ("floor lamp", "table lamp", "pendant lamp", "chandelier", "lamp")."""
+    return _TYPE_TO_LABELS.get(furniture_type, ())
+
+
 # ── Grouping catalog rows that show the same product ────────────────────────
 
 # IKEA image URLs embed an image id ("malm-bed-frame-high-white__0749130_pe745499_s5.jpg"
