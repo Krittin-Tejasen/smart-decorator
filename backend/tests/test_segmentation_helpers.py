@@ -11,6 +11,7 @@ duplicate boxes for one object, and the transformers 5.x argument rename.
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -137,6 +138,69 @@ class DynamicVocabTests(unittest.TestCase):
         phrases = vocab.rstrip(" .").split(" . ")
         self.assertLess(phrases.index("chandelier"), phrases.index("decoration"))
         self.assertEqual(phrases[-len(seg._ALWAYS_IN_VOCAB):], list(seg._ALWAYS_IN_VOCAB))
+
+
+class MissingHintedTypesTests(unittest.TestCase):
+    @staticmethod
+    def det(label, box=(0, 0, 10, 10)):
+        return {"label": label, "confidence": 0.9, "box": list(box)}
+
+    def test_a_hinted_type_with_no_matching_detection_is_missing(self):
+        raw = [self.det("sofa")]
+        self.assertEqual(seg._missing_hinted_types(raw, {"sofa": 1, "coffee_table": 1}), {"coffee_table"})
+
+    def test_nothing_missing_when_every_hinted_type_was_found(self):
+        raw = [self.det("sofa"), self.det("coffee table")]
+        self.assertEqual(seg._missing_hinted_types(raw, {"sofa": 1, "coffee_table": 1}), set())
+
+    def test_no_hints_means_nothing_can_be_missing(self):
+        self.assertEqual(seg._missing_hinted_types([self.det("sofa")], None), set())
+        self.assertEqual(seg._missing_hinted_types([], {}), set())
+
+    def test_an_unrecognised_label_does_not_count_as_any_type(self):
+        raw = [self.det("decoration")]  # label_to_type("decoration") is None
+        self.assertEqual(seg._missing_hinted_types(raw, {"vase": 1}), {"vase"})
+
+
+class FillMissingFromStaticVocabTests(unittest.TestCase):
+    """_fill_missing_from_static_vocab: the fix for a real bug found on a
+    real photo - a round coffee table Grounding DINO never once recognised
+    as "coffee table" under any vocabulary, but which WAS found (mislabelled
+    "desk") whenever "desk" happened to be in the prompt. The dynamic
+    vocabulary only includes the hinted type's own label, so that near-
+    synonym was gone and the item vanished entirely. This re-runs detection
+    with the full static vocabulary, but only for types still missing, and
+    only keeps a box that isn't already covered by something found the
+    first time."""
+
+    @staticmethod
+    def det(label, box):
+        return {"label": label, "confidence": 0.5, "box": list(box)}
+
+    def test_a_recovered_box_for_a_missing_type_is_kept(self):
+        raw = [self.det("sofa", (0, 0, 100, 100))]
+        with patch.object(seg, "_run_grounding_dino", return_value=[self.det("desk", (500, 500, 600, 600))]):
+            filled = seg._fill_missing_from_static_vocab(object(), raw, {"coffee_table"})
+        self.assertEqual([d["label"] for d in filled], ["desk"])
+
+    def test_a_box_that_overlaps_something_already_found_is_dropped(self):
+        raw = [self.det("sofa", (0, 0, 100, 100))]
+        with patch.object(seg, "_run_grounding_dino", return_value=[self.det("desk", (10, 10, 90, 90))]):
+            filled = seg._fill_missing_from_static_vocab(object(), raw, {"coffee_table"})
+        self.assertEqual(filled, [])
+
+    def test_a_detection_of_a_type_that_was_not_missing_is_ignored(self):
+        raw = [self.det("sofa", (0, 0, 100, 100))]
+        with patch.object(seg, "_run_grounding_dino", return_value=[self.det("armchair", (500, 500, 600, 600))]):
+            filled = seg._fill_missing_from_static_vocab(object(), raw, {"coffee_table"})
+        self.assertEqual(filled, [])
+
+    def test_nothing_missing_skips_the_extra_detection_pass_entirely(self):
+        spy = MagicMock()
+        with patch.object(seg, "_run_grounding_dino", new=spy):
+            filled = seg._fill_missing_from_static_vocab(object(), [], set())
+        self.assertEqual(filled, [])
+        spy.assert_not_called()
 
 
 class DedupeTests(unittest.TestCase):

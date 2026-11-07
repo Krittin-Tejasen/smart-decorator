@@ -106,7 +106,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 from pydantic import BaseModel
 
-from app.services.furniture_types import labels_for_type
+from app.services.furniture_types import label_to_type, labels_for_type
 from feature_extraction import (
     ColorSwatch,
     EnrichInput,
@@ -188,6 +188,58 @@ def _build_dynamic_vocab(hints: dict[str, int] | None) -> str | None:
         if always not in labels:
             labels.append(always)
     return " . ".join(labels) + " ."
+
+
+def _missing_hinted_types(raw: list[dict], hints: dict[str, int] | None) -> set[str]:
+    """Hinted furniture types with no detection among `raw` at all."""
+    if not hints:
+        return set()
+    found = {label_to_type(d["label"]) for d in raw}
+    found.discard(None)
+    return set(hints) - found
+
+
+def _fill_missing_from_static_vocab(img: Image.Image, raw: list[dict], missing_types: set[str]) -> list[dict]:
+    """A hinted item can vanish under the narrowed vocabulary not because the
+    vocabulary is too small, but because Grounding DINO's only real
+    affinity for that object's shape is a *different* word the narrowed
+    prompt didn't happen to include - verified on a real photo: a round
+    coffee table it never once recognised as "coffee table" under ANY
+    vocabulary (even that single phrase alone) was still found, mislabelled
+    "desk", whenever "desk" happened to be in the prompt, and disappeared
+    completely the moment it wasn't. Re-running with the full static
+    vocabulary gives those near-synonyms back, only for the types still
+    missing.
+
+    A recovered detection is kept by *family* (`_LABEL_FAMILY`), not by an
+    exact type match against `missing_types` - "desk" never equals the
+    missing "coffee_table" by type, but it is the same "table_or_storage"
+    family, which is exactly the near-synonym this exists to recover. A
+    detection that heavily overlaps something already found is dropped as
+    the same physical object under its first label, not new.
+    """
+    if not missing_types:
+        return []
+    missing_families = set()
+    for missing_type in missing_types:
+        for label in labels_for_type(missing_type):
+            missing_families.add(_LABEL_FAMILY.get(label, label))
+    if not missing_families:
+        return []
+
+    fallback_raw = _run_grounding_dino(img, _FURNITURE_PROMPT)
+    kept = []
+    for det in fallback_raw:
+        if _LABEL_FAMILY.get(det["label"], det["label"]) not in missing_families:
+            continue
+        if any(
+            _box_iou_and_containment(det["box"], existing["box"])[1] > 0.7
+            or _box_iou_and_containment(det["box"], existing["box"])[0] > 0.4
+            for existing in raw
+        ):
+            continue
+        kept.append(det)
+    return kept
 
 # Architecture / fixtures that must never show up as a shoppable card — whether
 # they came from the DINO decoys above or from Gemini's "every item" answer.
@@ -1463,6 +1515,12 @@ async def run_segmentation(
 
     try:
         raw = await asyncio.to_thread(_detect_with_grounding_dino_local, img, vocab)
+        if vocab is not None:
+            missing_types = _missing_hinted_types(raw, hints)
+            if missing_types:
+                raw = raw + await asyncio.to_thread(
+                    _fill_missing_from_static_vocab, img, raw, missing_types
+                )
         boxes_px = [det["box"] for det in raw]
         labels = [det["label"] for det in raw]
         mask_imgs = (
