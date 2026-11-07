@@ -28,7 +28,9 @@ them, index.update(id=..., set_metadata={"measured_color": None,
 import argparse
 import json
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,7 @@ from app.services.pinecone_client import get_index
 BACKUP_DIR = Path(__file__).resolve().parent.parent / "catalog_backups"
 UPDATE_BATCH = 1  # Pinecone's update() is per-vector, no batch endpoint
 RETRIES = 5
+WORKERS = 16  # index.update() is one HTTP call per vector; run many concurrently
 
 
 def load_measured(path: Path) -> list[dict[str, Any]]:
@@ -154,14 +157,33 @@ def main() -> None:
 
     index = get_index()
     written = 0
+    failed: list[str] = []
+    lock = threading.Lock()
     t0 = time.monotonic()
-    for vector_id, colour in vector_updates:
+
+    def do_one(item: tuple[str, dict]) -> str:
+        vector_id, colour = item
         update_with_retries(index, vector_id, colour)
-        written += 1
-        if written % 500 == 0:
-            print(f"  updated {written}/{len(vector_updates)} ({time.monotonic() - t0:.0f}s)...")
+        return vector_id
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = {pool.submit(do_one, item): item[0] for item in vector_updates}
+        for fut in as_completed(futures):
+            vector_id = futures[fut]
+            try:
+                fut.result()
+            except Exception as exc:
+                failed.append(vector_id)
+                print(f"  giving up on {vector_id}: {exc}", flush=True)
+                continue
+            with lock:
+                written += 1
+                if written % 500 == 0:
+                    print(f"  updated {written}/{len(vector_updates)} ({time.monotonic() - t0:.0f}s)...", flush=True)
 
     print(f"\nUpdated {written} vectors' metadata from {src_path.name}.")
+    if failed:
+        print(f"{len(failed)} vectors failed and were skipped: {failed}")
 
 
 if __name__ == "__main__":
