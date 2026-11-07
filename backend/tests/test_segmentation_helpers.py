@@ -127,6 +127,17 @@ class DynamicVocabTests(unittest.TestCase):
         for phrase in vocab.rstrip(" .").split(" . "):
             self.assertIn(phrase, seg._VOCAB_SET)
 
+    def test_decoration_stays_at_the_far_end_away_from_hinted_words(self):
+        # Regression: with "decoration" placed close to a specific hinted
+        # word (e.g. right before "chandelier"), Grounding DINO's attention
+        # bled across both and returned a garbled label ("decorationier")
+        # on real photos — confirmed fixed by always appending
+        # _ALWAYS_IN_VOCAB after every hinted label, never before.
+        vocab = seg._build_dynamic_vocab({"lamp": 1, "sofa": 1})
+        phrases = vocab.rstrip(" .").split(" . ")
+        self.assertLess(phrases.index("chandelier"), phrases.index("decoration"))
+        self.assertEqual(phrases[-len(seg._ALWAYS_IN_VOCAB):], list(seg._ALWAYS_IN_VOCAB))
+
 
 class DedupeTests(unittest.TestCase):
     @staticmethod

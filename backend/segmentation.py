@@ -173,11 +173,20 @@ def _build_dynamic_vocab(hints: dict[str, int] | None) -> str | None:
     """
     if not hints:
         return None
-    labels = list(_ALWAYS_IN_VOCAB)
+    # Hinted labels come first and _ALWAYS_IN_VOCAB last, not the reverse:
+    # verified on real photos that putting "decoration" (a vague, weakly-
+    # grounded catch-all) close to a specific word like "chandelier" makes
+    # Grounding DINO bleed attention across both and return a garbled label
+    # ("decorationier") that is neither — moving it to the far end of the
+    # prompt reproducibly fixed every case tried.
+    labels: list[str] = []
     for furniture_type in hints:
         for label in labels_for_type(furniture_type):
             if label in _VOCAB_SET and label not in labels:
                 labels.append(label)
+    for always in _ALWAYS_IN_VOCAB:
+        if always not in labels:
+            labels.append(always)
     return " . ".join(labels) + " ."
 
 # Architecture / fixtures that must never show up as a shoppable card — whether
