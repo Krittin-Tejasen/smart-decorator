@@ -108,6 +108,7 @@ class BackendProductMatchService implements ProductMatchService {
         ...featureFields(item, filter: filter),
         if (price?.min != null) 'min_price': '${price!.min}',
         if (price?.max != null) 'max_price': '${price!.max}',
+        if (item.verifiedType != null) 'furniture_type': item.verifiedType!,
         'image': MultipartFile.fromBytes(image, filename: 'item-${item.id}.png'),
       }),
     );

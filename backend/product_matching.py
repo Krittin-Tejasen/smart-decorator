@@ -315,7 +315,7 @@ async def match_products(
     target_width_cm: float | None = Form(None, gt=0),
     in_stock_only: bool = Form(False),
     top_k: int = Form(5, ge=1, le=20),
-    furniture_type: str | None = Form(None, description="A type the user picked; used instead of the one guessed from the label."),
+    furniture_type: str | None = Form(None, description="A type to use instead of the one guessed from the label - either the user picked it, or segmentation's label-verification agent corrected it (FurnitureItem.verified_type)."),
     colors: str | None = Form(None, description="Send only when the Colour filter is on: JSON [{catalog_color, share}, ...] of the item; keeps products of those colours (and neighbouring ones)."),
     materials: str | None = Form(None, description="Send only when the Material filter is on: JSON [{name, confidence}, ...] of the item; keeps products with one of those materials."),
 ):

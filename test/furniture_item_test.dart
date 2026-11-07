@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_decorator/shared/models/furniture_item.dart';
 
-Map<String, dynamic> itemJson({Object? cutout = 'omit'}) => {
+Map<String, dynamic> itemJson({Object? cutout = 'omit', Object? verifiedType = 'omit'}) => {
       'id': '0',
       'label': 'sofa',
       'confidence': 0.75,
@@ -15,6 +15,7 @@ Map<String, dynamic> itemJson({Object? cutout = 'omit'}) => {
         'area_pct': 5.7,
         'aspect_ratio': 2.9,
       },
+      if (verifiedType != 'omit') 'verified_type': verifiedType,
     };
 
 void main() {
@@ -45,6 +46,19 @@ void main() {
       expect(item.label, 'sofa');
       expect(item.maskPrecise, isTrue);
       expect(item.features.dominantColors, ['#725f4e', '#98826e']);
+    });
+  });
+
+  group('verifiedType', () {
+    test('reads the label-verification agent\'s corrected type', () {
+      final item = FurnitureItem.fromJson(itemJson(verifiedType: 'coffee_table'));
+      expect(item.verifiedType, 'coffee_table');
+    });
+
+    test('missing or empty means verification did not run or did not answer', () {
+      expect(FurnitureItem.fromJson(itemJson()).verifiedType, isNull);
+      expect(FurnitureItem.fromJson(itemJson(verifiedType: null)).verifiedType, isNull);
+      expect(FurnitureItem.fromJson(itemJson(verifiedType: '')).verifiedType, isNull);
     });
   });
 

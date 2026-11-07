@@ -158,6 +158,13 @@ class FurnitureItem {
   final bool maskPrecise;
   final FurnitureFeatures features;
 
+  /// The closed-vocabulary type segmentation's label-verification agent
+  /// says this item's own crop actually shows (e.g. "coffee_table"),
+  /// independent of [label] - null when verification didn't run or didn't
+  /// answer for this item. Send as the `furniture_type` override to
+  /// /match-products when present, same as a user-picked type would be.
+  final String? verifiedType;
+
   FurnitureItem({
     required this.id,
     required this.label,
@@ -168,6 +175,7 @@ class FurnitureItem {
     required this.maskImage,
     required this.maskPrecise,
     required this.features,
+    this.verifiedType,
   });
 
   bool get hasCutout => cutoutImage != null && cutoutImage!.isNotEmpty;
@@ -187,6 +195,7 @@ class FurnitureItem {
       features: FurnitureFeatures.fromJson(
         json['features'] as Map<String, dynamic>? ?? const {},
       ),
+      verifiedType: _nonEmpty(json['verified_type']),
     );
   }
 }

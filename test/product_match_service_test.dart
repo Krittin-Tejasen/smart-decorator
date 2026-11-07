@@ -47,7 +47,8 @@ class FakeAdapter implements HttpClientAdapter {
 Map<String, String> formFields(RequestOptions options) =>
     {for (final field in (options.data as FormData).fields) field.key: field.value};
 
-FurnitureItem withImages(String label, {bool cutout = true, bool precise = true, bool crop = true}) => FurnitureItem(
+FurnitureItem withImages(String label, {bool cutout = true, bool precise = true, bool crop = true, String? verifiedType}) =>
+    FurnitureItem(
       id: '3',
       label: label,
       confidence: 0.8,
@@ -57,6 +58,7 @@ FurnitureItem withImages(String label, {bool cutout = true, bool precise = true,
       maskImage: '',
       maskPrecise: precise,
       features: FurnitureFeatures(dominantColors: const [], areaPct: 5, aspectRatio: 1),
+      verifiedType: verifiedType,
     );
 
 void main() {
@@ -202,6 +204,20 @@ void main() {
       expect(bare.imageUrl, isNull);
       expect(bare.dimensionsLabel, isNull);
       expect(bare.inStock, isFalse);
+    });
+
+    test('sends the verified type as furniture_type, to override the label guess', () async {
+      final adapter = FakeAdapter(response);
+      await serviceWith(adapter).matchesFor(withImages('desk', verifiedType: 'coffee_table'));
+
+      expect(formFields(adapter.lastRequest!)['furniture_type'], 'coffee_table');
+    });
+
+    test('no furniture_type is sent when the item was not verified', () async {
+      final adapter = FakeAdapter(response);
+      await serviceWith(adapter).matchesFor(withImages('sofa'));
+
+      expect(formFields(adapter.lastRequest!).keys, isNot(contains('furniture_type')));
     });
 
     test('sends the price range', () async {
