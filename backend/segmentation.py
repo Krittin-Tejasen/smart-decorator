@@ -117,6 +117,7 @@ from feature_extraction import (
     extract_swatches,
     safe_error,
 )
+from label_verification import VerifyInput, verify_labels
 
 router = APIRouter(tags=["segmentation"])
 
@@ -338,6 +339,14 @@ class FurnitureItem(BaseModel):
     mask_image: str             # data:image/png;base64,… (full-size binary mask, L mode)
     mask_precise: bool          # True = real SAM 2 mask, False = bbox rectangle approximation
     features: FurnitureFeatures
+    # label_verification.verify_labels's closed-vocabulary answer for this
+    # item's own crop (furniture_types.FURNITURE_TYPES), independent of
+    # `label` — catches a detector label whose only real near-synonym was
+    # the wrong type (see _fill_missing_from_static_vocab). None when
+    # verification didn't run or didn't return an answer for this item;
+    # not yet consumed by matching, which still derives its type from
+    # `label` via label_to_type.
+    verified_type: str | None = None
 
 
 class SegmentationResult(BaseModel):
@@ -1490,6 +1499,31 @@ async def _enrich_items(items: list[FurnitureItem]) -> None:
             apply_enrichment(item, enriched[item.id])
 
 
+async def _verify_items(items: list[FurnitureItem]) -> None:
+    """One Gemini call for the whole room: does each item's own crop really
+    look like its detected label? Sets `verified_type` in place; never
+    raises, and a missing id just leaves that item's `verified_type` as
+    None - not yet consumed by matching, see FurnitureItem.verified_type."""
+    if not items:
+        return
+    try:
+        inputs = [
+            VerifyInput(
+                id=item.id,
+                label=item.label,
+                image=_decode_data_url_image(item.cutout_image or item.crop_image),
+            )
+            for item in items
+        ]
+        verified = await verify_labels(inputs)
+    except Exception as exc:
+        print(f"[segmentation] label verification skipped: {safe_error(exc)}")
+        return
+    for item in items:
+        if item.id in verified:
+            item.verified_type = verified[item.id]
+
+
 async def run_segmentation(
     image_bytes: bytes, mime_type: str, hints: dict[str, int] | None = None
 ) -> SegmentationResult:
@@ -1567,6 +1601,7 @@ async def run_segmentation(
     ]
 
     await _enrich_items(items)
+    await _verify_items(items)
 
     counts = dict(Counter(item.label for item in items))
     result = SegmentationResult(

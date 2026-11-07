@@ -317,6 +317,30 @@ class SegmentationIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await seg._enrich_items([])
         spy.assert_not_called()
 
+    async def test_verification_sets_verified_type(self):
+        item = self.build()
+        with patch.object(seg, "verify_labels", new=AsyncMock(return_value={item.id: "sofa"})):
+            await seg._verify_items([item])
+        self.assertEqual(item.verified_type, "sofa")
+
+    async def test_item_missing_from_the_verification_answer_stays_unverified(self):
+        item = self.build()
+        with patch.object(seg, "verify_labels", new=AsyncMock(return_value={})):
+            await seg._verify_items([item])
+        self.assertIsNone(item.verified_type)
+
+    async def test_verification_crash_never_breaks_segmentation(self):
+        item = self.build()
+        with patch.object(seg, "verify_labels", new=AsyncMock(side_effect=RuntimeError("boom"))):
+            await seg._verify_items([item])
+        self.assertIsNone(item.verified_type)
+
+    async def test_no_items_means_no_verification_call(self):
+        spy = AsyncMock()
+        with patch.object(seg, "verify_labels", new=spy):
+            await seg._verify_items([])
+        spy.assert_not_called()
+
 
 class ErrorLoggingTests(unittest.IsolatedAsyncioTestCase):
     """The Gemini API key is a ?key= query parameter and httpx quotes the whole
