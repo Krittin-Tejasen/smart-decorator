@@ -18,7 +18,9 @@ Image providers (chosen via AI_IMAGE_PROVIDER env var):
 
 import asyncio
 import base64
+import json
 import os
+import re
 import time
 import traceback
 import uuid
@@ -30,7 +32,8 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageDraw
 
-from furniture_hints import detect_added_furniture
+from app.services.furniture_types import FURNITURE_TYPES
+from furniture_hints import parse_hints
 from segmentation import run_segmentation
 
 router = APIRouter(tags=["generation"])
@@ -70,7 +73,13 @@ _COLOR_DESCRIPTIONS: dict[str, str] = {
     "midnight_blue_silver": "midnight blue paired with silver/chrome accents",
 }
 
-_COMPOSER_SYSTEM_PROMPT = """
+# Marks the end of the paragraph and the start of the furniture plan - see
+# compose_design_prompt. A plain keyword wouldn't do; it has to be something
+# that would never plausibly appear inside the paragraph itself.
+_FURNITURE_JSON_MARKER = "###FURNITURE_JSON###"
+
+_COMPOSER_SYSTEM_PROMPT = (
+    """
 You are an interior-design prompt writer for an AI image generator. You will
 be shown a photo of the actual room the user wants redecorated, along with
 the requested room type, design style, and accent color.
@@ -103,8 +112,17 @@ Rules:
   wood paneling, or tile into hardwood). Express the requested style only
   through furniture, textiles, rugs, lighting fixtures, decor, and wall
   paint color - the underlying construction material never changes.
-- Output only the paragraph, no headings or extra commentary.
+- Output only the paragraph itself before the marker below - no headings or
+  extra commentary.
 """.strip()
+    + "\n\nAfter the paragraph, on its own new line, write exactly:\n"
+    + _FURNITURE_JSON_MARKER
+    + "\nThen, on the next line, a JSON array (no markdown fences) listing "
+    "every distinct piece of furniture/decor named in the paragraph above. "
+    'Each element: {"type": string, "count": integer}. "type" must be '
+    "EXACTLY one of: " + ", ".join(FURNITURE_TYPES) + ', or "other" if '
+    "truly none fit. Output nothing after the JSON array."
+)
 
 # Hard structural constraints that must reach the image model on every
 # single request, regardless of whether the prompt-composition agent
@@ -153,9 +171,18 @@ def build_static_fallback_prompt(room_type: str, style: str, color: str) -> str:
     )
 
 
+def _parse_hints_from_text(text: str) -> dict[str, int]:
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    try:
+        payload = json.loads(cleaned)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parse_hints(payload)
+
+
 async def compose_design_prompt(
     room_type: str, style: str, color: str, image_bytes: bytes, image_mime: str
-) -> str:
+) -> tuple[str, dict[str, int]]:
     """Prompt-composition agent: turns the room/style/color ids into a single
     descriptive, natural-language paragraph via a Gemini call that also sees
     the actual room photo. Seeing the photo lets it ground furniture choice
@@ -166,6 +193,13 @@ async def compose_design_prompt(
     real room. Because the result now depends on the specific uploaded
     photo (not just the id combo), it is no longer cached across requests
     the way the old text-only version was.
+
+    Also returns a furniture plan ({type: count}, closed vocabulary) parsed
+    from the same response, right after the paragraph - this is the same
+    decision the paragraph describes in prose, just said twice, so it costs
+    no extra API call. It's a *plan* for what the image model is being told
+    to draw, not a check of what it actually drew - the image model doesn't
+    always follow the prompt exactly, same as the paragraph itself.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -211,7 +245,10 @@ async def compose_design_prompt(
         response.raise_for_status()
         response_data = response.json()
 
-    return response_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    text = response_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    paragraph, marker, furniture_block = text.partition(_FURNITURE_JSON_MARKER)
+    hints = _parse_hints_from_text(furniture_block) if marker else {}
+    return paragraph.strip(), hints
 
 
 def build_data_url(image_bytes: bytes, mime_type: str) -> str:
@@ -748,8 +785,9 @@ async def run_generate_room(
     source_image = _open_source_image(image_bytes)
 
     progress("compose", "Analyzing your room and planning the design", 0.05)
+    plan_hints: dict[str, int] = {}
     try:
-        style_paragraph = await compose_design_prompt(
+        style_paragraph, plan_hints = await compose_design_prompt(
             room_type, style, color, image_bytes, mime_type
         )
         # The composer only writes the style/furniture description - the hard
@@ -822,15 +860,14 @@ async def run_generate_room(
         progress("segment", "Detecting furniture in the design", 0.93)
         _, encoded = generated_image.split(",", 1)
         gen_bytes = base64.b64decode(encoded)
-        # Tried asking Gemini's image model to also return the furniture list
-        # in the SAME call that renders the image (same generateContent
-        # request, image + text parts) - confirmed by real testing that
-        # gemini-3.1-flash-image never includes the text part, only the
-        # image, so that path was removed. Back to a separate vision call,
-        # and only for "gemini": Replicate/OpenRouter (e.g. Muse) are
-        # dedicated image endpoints with no text channel at all, so for them
-        # segmentation always falls back to its full static vocabulary.
-        hints = await detect_added_furniture(gen_bytes, "image/png") if provider == "gemini" else {}
+        # plan_hints comes from compose_design_prompt - the same call every
+        # real provider's prompt is already built from, so it costs nothing
+        # extra here. Mock is the one provider that never acts on `prompt`
+        # at all (it only watermarks the original photo), so the plan
+        # wouldn't describe anything actually in its "generated" image -
+        # skip hints for it specifically; segmentation then falls back to
+        # its full static vocabulary, same as before this feature existed.
+        hints = plan_hints if provider != "mock" else {}
         seg_result = await run_segmentation(gen_bytes, "image/png", hints=hints)
         response["furniture_segments"] = seg_result.model_dump()
 

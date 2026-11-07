@@ -36,7 +36,7 @@ def png_data_url() -> str:
     return "data:image/png;base64," + base64.b64encode(png_bytes()).decode()
 
 
-COMPOSE = patch.object(generation, "compose_design_prompt", new=AsyncMock(return_value="A calm room."))
+COMPOSE = patch.object(generation, "compose_design_prompt", new=AsyncMock(return_value=("A calm room.", {})))
 
 
 class PipelineStageTests(unittest.IsolatedAsyncioTestCase):
@@ -115,39 +115,53 @@ class PipelineStageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([s for s, _, _ in seen][-2:], ["match", "segment"])
         self.assertEqual(result["furniture_segments"], {"items": [], "total": 0})
 
-    async def test_gemini_gets_hints_from_a_separate_vision_call(self):
-        # Tried getting the furniture list from the SAME call that renders
-        # the image (both image and text parts in one generateContent
-        # response) - confirmed by real testing that gemini-3.1-flash-image
-        # never sends the text part back, so that idea was dropped. Back to
-        # the separate furniture_hints.detect_added_furniture call.
+    async def test_plan_hints_from_the_composer_reach_segmentation(self):
+        # Tried a separate post-generation vision call, then tried asking
+        # the image model to self-report in the same call as the image -
+        # both dropped (see generation.py's compose_design_prompt and the
+        # `if segment:` block for why). The furniture plan now comes from
+        # compose_design_prompt - the same call that writes the prompt every
+        # real provider already uses - so it costs nothing extra and applies
+        # to any provider that actually acts on that prompt.
         fake_seg = SimpleNamespace(items=[], model_dump=lambda: {"items": [], "total": 0})
-        detect = AsyncMock(return_value={"sofa": 1, "lamp": 2})
+        compose = AsyncMock(return_value=("A calm room.", {"sofa": 1, "lamp": 2}))
         segment_spy = AsyncMock(return_value=fake_seg)
-        with COMPOSE, \
+        with patch.object(generation, "compose_design_prompt", new=compose), \
                 patch.object(generation, "generate_with_gemini", new=AsyncMock(return_value=png_data_url())), \
                 patch.object(generation, "critique_generated_image", new=AsyncMock(return_value=(True, "ok"))), \
-                patch.object(generation, "detect_added_furniture", new=detect), \
                 patch.object(generation, "run_segmentation", new=segment_spy):
             await self.run_pipeline(provider="gemini", segment=True)
 
-        detect.assert_awaited_once()
         segment_spy.assert_awaited_once()
         self.assertEqual(segment_spy.await_args.kwargs.get("hints"), {"sofa": 1, "lamp": 2})
 
-    async def test_non_gemini_providers_never_get_hints(self):
-        # Muse (OpenRouter) and Replicate are dedicated image endpoints with
-        # no text channel - no separate call is worth making for them either.
+    async def test_replicate_and_openrouter_also_get_plan_hints(self):
+        # They're dedicated image endpoints with no text channel of their
+        # own, but they DO render from the same composed prompt, so the
+        # plan still describes what they were asked to draw.
         fake_seg = SimpleNamespace(items=[], model_dump=lambda: {"items": [], "total": 0})
-        detect = AsyncMock()
+        compose = AsyncMock(return_value=("A calm room.", {"desk": 1}))
         segment_spy = AsyncMock(return_value=fake_seg)
-        with COMPOSE, \
+        with patch.object(generation, "compose_design_prompt", new=compose), \
+                patch.object(generation, "generate_with_replicate", new=AsyncMock(return_value=png_data_url())), \
+                patch.object(generation, "critique_generated_image", new=AsyncMock(return_value=(True, "ok"))), \
+                patch.object(generation, "run_segmentation", new=segment_spy):
+            await self.run_pipeline(provider="replicate", segment=True)
+
+        self.assertEqual(segment_spy.await_args.kwargs.get("hints"), {"desk": 1})
+
+    async def test_mock_provider_never_gets_hints(self):
+        # Mock is the one provider that never acts on the composed prompt at
+        # all (it only watermarks the original photo), so a plan would
+        # describe furniture that was never actually drawn.
+        fake_seg = SimpleNamespace(items=[], model_dump=lambda: {"items": [], "total": 0})
+        compose = AsyncMock(return_value=("A calm room.", {"sofa": 1}))
+        segment_spy = AsyncMock(return_value=fake_seg)
+        with patch.object(generation, "compose_design_prompt", new=compose), \
                 patch.object(generation, "generate_with_mock", new=AsyncMock(return_value=png_data_url())), \
-                patch.object(generation, "detect_added_furniture", new=detect), \
                 patch.object(generation, "run_segmentation", new=segment_spy):
             await self.run_pipeline(provider="mock", segment=True)
 
-        detect.assert_not_awaited()
         self.assertEqual(segment_spy.await_args.kwargs.get("hints"), {})
 
     async def test_unreadable_image_fails_before_any_stage(self):
@@ -166,6 +180,82 @@ class PipelineStageTests(unittest.IsolatedAsyncioTestCase):
                 "bedroom", "japandi", "warm_oat_cream", png_bytes(), "image/png", provider="mock"
             )
         self.assertIn("generated_image", result)
+
+
+class ParseHintsFromTextTests(unittest.TestCase):
+    def test_plain_json_array(self):
+        self.assertEqual(
+            generation._parse_hints_from_text('[{"type": "sofa", "count": 1}]'),
+            {"sofa": 1},
+        )
+
+    def test_markdown_fenced_json_is_accepted(self):
+        text = '```json\n[{"type": "lamp", "count": 2}]\n```'
+        self.assertEqual(generation._parse_hints_from_text(text), {"lamp": 2})
+
+    def test_other_and_unknown_types_are_dropped(self):
+        text = '[{"type": "other", "count": 3}, {"type": "sofa", "count": 1}]'
+        self.assertEqual(generation._parse_hints_from_text(text), {"sofa": 1})
+
+    def test_garbage_text_returns_empty_instead_of_raising(self):
+        for text in ("", "not json at all", "[1, 2, 3]", "null"):
+            self.assertEqual(generation._parse_hints_from_text(text), {})
+
+
+def gemini_text_response(text: str) -> "FakeHttpxResponse":
+    return FakeHttpxResponse({"candidates": [{"content": {"parts": [{"text": text}]}}]})
+
+
+class FakeHttpxResponse:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._data
+
+
+class FakeHttpxClient:
+    def __init__(self, response):
+        self._response = response
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def post(self, *args, **kwargs):
+        return self._response
+
+
+class ComposeDesignPromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_splits_the_paragraph_from_the_furniture_plan(self):
+        text = (
+            "A calm room with a sofa and a floor lamp.\n\n"
+            '###FURNITURE_JSON###\n[{"type": "sofa", "count": 1}, {"type": "lamp", "count": 1}]'
+        )
+        fake_client = FakeHttpxClient(gemini_text_response(text))
+        with patch("httpx.AsyncClient", return_value=fake_client), \
+                patch.dict(os.environ, {"GEMINI_API_KEY": "x"}):
+            paragraph, hints = await generation.compose_design_prompt(
+                "living room", "japandi", "warm_oat_cream", b"img", "image/png"
+            )
+        self.assertEqual(paragraph, "A calm room with a sofa and a floor lamp.")
+        self.assertEqual(hints, {"sofa": 1, "lamp": 1})
+
+    async def test_no_marker_in_the_response_gives_empty_hints_not_an_error(self):
+        text = "Just a paragraph, no marker at all."
+        fake_client = FakeHttpxClient(gemini_text_response(text))
+        with patch("httpx.AsyncClient", return_value=fake_client), \
+                patch.dict(os.environ, {"GEMINI_API_KEY": "x"}):
+            paragraph, hints = await generation.compose_design_prompt(
+                "living room", "japandi", "warm_oat_cream", b"img", "image/png"
+            )
+        self.assertEqual(paragraph, text)
+        self.assertEqual(hints, {})
 
 
 class JobEndpointTests(unittest.TestCase):
