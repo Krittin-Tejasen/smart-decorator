@@ -12,7 +12,14 @@ a real photo where a round coffee table was never once recognised as
 "coffee table" under any vocabulary, but WAS found (mislabelled "desk")
 whenever "desk" happened to be available (see
 segmentation._fill_missing_from_static_vocab). That gap-fill recovers the
-box; this corrects the label afterwards, from the crop alone.
+box; this corrects the label afterwards.
+
+The image sent for each item is a PADDED crop of the room photo (the
+item's box plus a margin, not the tight cutout used for display) - a real
+test found the tight cutout alone is sometimes genuinely ambiguous (a
+plain rectangular wood coffee table with no visible context reads just as
+plausibly as a bench), and the surrounding few centimetres of room
+(e.g. a sofa right next to it) is often what actually disambiguates it.
 
 One batched call per room (same pattern as feature_extraction.enrich_
 features), not one per item. Best-effort: {} on any failure (no key, quota,
@@ -42,14 +49,18 @@ _ALLOWED_TYPES = tuple(FURNITURE_TYPES) + ("other",)
 class VerifyInput(NamedTuple):
     id: str
     label: str
-    image: Image.Image  # RGBA cut-out, or an RGB crop when there is no mask
+    image: Image.Image  # padded room crop - the item plus a margin of context
 
 
 _INSTRUCTIONS = (
-    "Each image below is one piece of furniture/decor cut out of the SAME "
-    "AI-generated interior photo (background removed, shown on white). Each "
-    "is preceded by its id and what a detector currently guesses it is - "
-    "that guess can be wrong, especially for an unusual shape.\n"
+    "Each image below is a crop of the SAME AI-generated interior photo, "
+    "showing one piece of furniture/decor filling most of the frame plus a "
+    "little of its surroundings for context (what it's next to, in front "
+    "of, resting on). Each is preceded by its id and what a detector "
+    "currently guesses the MAIN item is - that guess can be wrong, "
+    "especially for an unusual shape; use the surrounding context to help "
+    "tell it apart from a similar-looking type, but identify the main "
+    "item, not the surrounding ones.\n"
     "For EVERY id, look at the actual picture and answer with the single "
     "best match for what it really shows, choosing EXACTLY one word from "
     'this list (pick the closest even if the current guess looks close; '

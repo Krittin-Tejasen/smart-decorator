@@ -162,6 +162,36 @@ class MissingHintedTypesTests(unittest.TestCase):
         self.assertEqual(seg._missing_hinted_types(raw, {"vase": 1}), {"vase"})
 
 
+class PaddedCropTests(unittest.TestCase):
+    """_padded_crop: give the label-verification agent room context around
+    the item (what it's next to), not just a cutout on blank space - real
+    testing found the tight cutout alone can be genuinely ambiguous."""
+
+    def test_pads_outward_on_every_side(self):
+        img = Image.new("RGB", (400, 400))
+        bbox = seg.BoundingBox(x_min=0.4, y_min=0.4, x_max=0.6, y_max=0.6)  # centered 80x80px box
+        crop = seg._padded_crop(img, bbox, pad_frac=0.5)
+        # box width/height = 0.2; pad = 0.5 * 0.2 = 0.1 on each side -> 0.3..0.7 (160px)
+        self.assertEqual(crop.size, (160, 160))
+
+    def test_clamps_to_image_bounds_without_erroring(self):
+        img = Image.new("RGB", (400, 400))
+        bbox = seg.BoundingBox(x_min=0.0, y_min=0.0, x_max=0.1, y_max=0.1)  # corner box
+        crop = seg._padded_crop(img, bbox, pad_frac=2.0)
+        self.assertLessEqual(crop.size[0], 400)
+        self.assertLessEqual(crop.size[1], 400)
+        self.assertGreater(crop.size[0], 0)
+        self.assertGreater(crop.size[1], 0)
+
+    def test_larger_pad_frac_gives_a_larger_crop(self):
+        img = Image.new("RGB", (400, 400))
+        bbox = seg.BoundingBox(x_min=0.4, y_min=0.4, x_max=0.6, y_max=0.6)
+        small = seg._padded_crop(img, bbox, pad_frac=0.2)
+        large = seg._padded_crop(img, bbox, pad_frac=0.8)
+        self.assertLess(small.size[0], large.size[0])
+        self.assertLess(small.size[1], large.size[1])
+
+
 class FillMissingFromStaticVocabTests(unittest.TestCase):
     """_fill_missing_from_static_vocab: the fix for a real bug found on a
     real photo - a round coffee table Grounding DINO never once recognised

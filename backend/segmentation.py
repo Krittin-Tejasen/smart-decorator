@@ -1499,8 +1499,23 @@ async def _enrich_items(items: list[FurnitureItem]) -> None:
             apply_enrichment(item, enriched[item.id])
 
 
-async def _verify_items(items: list[FurnitureItem]) -> None:
-    """One Gemini call for the whole room: does each item's own crop really
+def _padded_crop(img: Image.Image, bbox: BoundingBox, pad_frac: float = 0.6) -> Image.Image:
+    """The item's box plus a margin of surrounding room, clamped to the
+    image - real testing found the tight cutout alone is sometimes
+    genuinely ambiguous (a plain rectangular table reads just as plausibly
+    as a bench) without seeing what it's next to."""
+    W, H = img.size
+    bw, bh = bbox.x_max - bbox.x_min, bbox.y_max - bbox.y_min
+    x1 = max(0.0, bbox.x_min - bw * pad_frac)
+    y1 = max(0.0, bbox.y_min - bh * pad_frac)
+    x2 = min(1.0, bbox.x_max + bw * pad_frac)
+    y2 = min(1.0, bbox.y_max + bh * pad_frac)
+    return img.crop((int(x1 * W), int(y1 * H), int(x2 * W), int(y2 * H)))
+
+
+async def _verify_items(items: list[FurnitureItem], img: Image.Image) -> None:
+    """One Gemini call for the whole room: does each item's padded crop
+    (its box plus surrounding context, not the tight display cutout) really
     look like its detected label? Sets `verified_type` in place; never
     raises, and a missing id just leaves that item's `verified_type` as
     None - not yet consumed by matching, see FurnitureItem.verified_type."""
@@ -1511,7 +1526,7 @@ async def _verify_items(items: list[FurnitureItem]) -> None:
             VerifyInput(
                 id=item.id,
                 label=item.label,
-                image=_decode_data_url_image(item.cutout_image or item.crop_image),
+                image=_padded_crop(img, item.bbox),
             )
             for item in items
         ]
@@ -1601,7 +1616,7 @@ async def run_segmentation(
     ]
 
     await _enrich_items(items)
-    await _verify_items(items)
+    await _verify_items(items, img)
 
     counts = dict(Counter(item.label for item in items))
     result = SegmentationResult(
