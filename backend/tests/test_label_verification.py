@@ -54,7 +54,10 @@ class ParseVerificationsTests(unittest.TestCase):
 
 class VerifyLabelsTests(unittest.IsolatedAsyncioTestCase):
     def inputs(self, n):
-        return [lv.VerifyInput(id=str(i), label="desk", image=solid()) for i in range(n)]
+        return [
+            lv.VerifyInput(id=str(i), label="desk", cutout=solid(), context=solid((40, 40)))
+            for i in range(n)
+        ]
 
     async def test_without_an_api_key_nothing_is_sent(self):
         env = {"GEMINI_API_KEY": ""}
@@ -78,7 +81,7 @@ class VerifyLabelsTests(unittest.IsolatedAsyncioTestCase):
     async def test_large_batches_are_split(self):
         post = AsyncMock(return_value=fake_response("[]"))
         await lv.verify_labels(self.inputs(25), post=post)
-        self.assertEqual(post.await_count, 3)  # 12 + 12 + 1
+        self.assertEqual(post.await_count, 5)  # 6+6+6+6+1, batch size 6 (two images per item)
 
     async def test_network_failure_returns_empty_instead_of_raising(self):
         post = AsyncMock(side_effect=RuntimeError("quota"))
@@ -88,12 +91,24 @@ class VerifyLabelsTests(unittest.IsolatedAsyncioTestCase):
         post = AsyncMock(return_value=fake_response("not json"))
         self.assertEqual(await lv.verify_labels(self.inputs(2), post=post), {})
 
-    def test_request_sends_the_current_guess_and_the_image_per_item(self):
+    def test_request_sends_the_current_guess_and_both_images_per_item(self):
         body = lv.build_request(self.inputs(2))
         parts = body["contents"][0]["parts"]
-        self.assertEqual(sum("inline_data" in p for p in parts), 2)
-        self.assertIn('id=1 current_guess="desk"', [p.get("text") for p in parts])
+        # 2 items x (1 cutout + 1 context) = 4 images total.
+        self.assertEqual(sum("inline_data" in p for p in parts), 4)
+        texts = [p.get("text") for p in parts if "text" in p]
+        self.assertIn('id=1 current_guess="desk" - ITEM:', texts)
+        self.assertIn('id=1 - CONTEXT:', texts)
         self.assertEqual(body["generationConfig"]["responseMimeType"], "application/json")
+
+    def test_item_image_comes_before_context_image_for_each_id(self):
+        body = lv.build_request(self.inputs(1))
+        parts = body["contents"][0]["parts"]
+        item_text_idx = next(i for i, p in enumerate(parts) if p.get("text") == 'id=0 current_guess="desk" - ITEM:')
+        context_text_idx = next(i for i, p in enumerate(parts) if p.get("text") == "id=0 - CONTEXT:")
+        self.assertLess(item_text_idx, context_text_idx)
+        self.assertIn("inline_data", parts[item_text_idx + 1])
+        self.assertIn("inline_data", parts[context_text_idx + 1])
 
 
 if __name__ == "__main__":

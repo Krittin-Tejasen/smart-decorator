@@ -342,21 +342,25 @@ class SegmentationIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await seg._verify_items([], Image.new("RGB", (10, 10)))
         spy.assert_not_called()
 
-    async def test_verification_image_includes_padding_around_the_box(self):
+    async def test_verification_sends_both_a_cutout_and_a_padded_context_crop(self):
         item = self.build()
         captured = {}
 
         async def fake_verify(inputs):
-            captured["size"] = inputs[0].image.size
+            captured["cutout_size"] = inputs[0].cutout.size
+            captured["context_size"] = inputs[0].context.size
             return {}
 
         with patch.object(seg, "verify_labels", new=fake_verify):
             await seg._verify_items([item], self.room)
         # The item's own tight box is 240x180px (normalised 0.2..0.8 x
-        # 0.4..0.85 of a 400x400 room) - a padded crop must be strictly
-        # larger in both dimensions, not just the tight box.
-        self.assertGreater(captured["size"][0], 240)
-        self.assertGreater(captured["size"][1], 180)
+        # 0.4..0.85 of a 400x400 room) - the context crop must be strictly
+        # larger in both dimensions than that tight box; the cutout is the
+        # tight box itself (same as the display thumbnail).
+        self.assertGreater(captured["context_size"][0], 240)
+        self.assertGreater(captured["context_size"][1], 180)
+        self.assertLessEqual(captured["cutout_size"][0], 240)
+        self.assertLessEqual(captured["cutout_size"][1], 180)
 
 
 class ErrorLoggingTests(unittest.IsolatedAsyncioTestCase):

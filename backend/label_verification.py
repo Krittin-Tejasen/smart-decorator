@@ -14,12 +14,17 @@ whenever "desk" happened to be available (see
 segmentation._fill_missing_from_static_vocab). That gap-fill recovers the
 box; this corrects the label afterwards.
 
-The image sent for each item is a PADDED crop of the room photo (the
-item's box plus a margin, not the tight cutout used for display) - a real
-test found the tight cutout alone is sometimes genuinely ambiguous (a
-plain rectangular wood coffee table with no visible context reads just as
-plausibly as a bench), and the surrounding few centimetres of room
-(e.g. a sofa right next to it) is often what actually disambiguates it.
+Two images are sent per item: the tight cutout/crop used for display (the
+exact item, nothing else) and a PADDED crop of the room photo (the item's
+box plus a margin). Neither alone was enough on real photos: the tight
+cutout in isolation is sometimes genuinely ambiguous (a plain rectangular
+wood coffee table with no visible context reads just as plausibly as a
+bench) - padding fixed that, but padding alone then mis-picked a chair as
+"dining_table" in a dense scene, because its imprecise box got swamped by
+the neighbouring table once padded outward with no sense of which pixels
+were actually the chair. Sending the exact cutout first (so the model
+knows which object is in question) plus the padded crop (for context)
+targets both failure modes at once.
 
 One batched call per room (same pattern as feature_extraction.enrich_
 features), not one per item. Best-effort: {} on any failure (no key, quota,
@@ -42,40 +47,49 @@ from feature_extraction import prepare_image, safe_error
 
 PostFn = Callable[[dict], Awaitable[dict]]
 
-_BATCH_SIZE = 12
+_BATCH_SIZE = 6  # two images per item now, keep each request a sane size
 _ALLOWED_TYPES = tuple(FURNITURE_TYPES) + ("other",)
 
 
 class VerifyInput(NamedTuple):
     id: str
     label: str
-    image: Image.Image  # padded room crop - the item plus a margin of context
+    cutout: Image.Image   # the exact item, tight - same image used for display
+    context: Image.Image  # the item's box plus a margin, for disambiguation only
 
 
 _INSTRUCTIONS = (
-    "Each image below is a crop of the SAME AI-generated interior photo, "
-    "showing one piece of furniture/decor filling most of the frame plus a "
-    "little of its surroundings for context (what it's next to, in front "
-    "of, resting on). Each is preceded by its id and what a detector "
-    "currently guesses the MAIN item is - that guess can be wrong, "
-    "especially for an unusual shape; use the surrounding context to help "
-    "tell it apart from a similar-looking type, but identify the main "
-    "item, not the surrounding ones.\n"
-    "For EVERY id, look at the actual picture and answer with the single "
-    "best match for what it really shows, choosing EXACTLY one word from "
-    'this list (pick the closest even if the current guess looks close; '
-    'use "other" only if truly none fit): ' + ", ".join(_ALLOWED_TYPES) + "\n"
+    "For each id below you are shown TWO images, in this order:\n"
+    "1. ITEM - the exact piece of furniture/decor in question, cut tight "
+    "around it (may be on a plain/transparent background).\n"
+    "2. CONTEXT - a wider crop of the same AI-generated interior photo "
+    "around that same item, showing some of its surroundings (what it's "
+    "next to, in front of, resting on).\n"
+    "Identify ONLY the item shown in image 1. Use image 2 purely as "
+    "supporting context to help tell it apart from a similar-looking type "
+    "(e.g. a coffee table vs a bench) - never answer with something that "
+    "is only visible in image 2 and not image 1.\n"
+    "Each id is preceded by what a detector currently guesses the item "
+    "is - that guess can be wrong, especially for an unusual shape.\n"
+    "For EVERY id, answer with the single best match for what image 1 "
+    "really shows, choosing EXACTLY one word from this list (pick the "
+    'closest even if the current guess looks close; use "other" only if '
+    'truly none fit): ' + ", ".join(_ALLOWED_TYPES) + "\n"
     "Return ONLY a JSON array, no markdown, no extra text. Each element:\n"
-    '  {"id": <the same id given with that image>, "type": <your answer>}'
+    '  {"id": <the same id given with that item>, "type": <your answer>}'
 )
 
 
 def build_request(inputs: list[VerifyInput]) -> dict:
     parts: list[dict] = [{"text": _INSTRUCTIONS}]
     for item in inputs:
-        parts.append({"text": f'id={item.id} current_guess="{item.label}"'})
+        parts.append({"text": f'id={item.id} current_guess="{item.label}" - ITEM:'})
         parts.append(
-            {"inline_data": {"mime_type": "image/jpeg", "data": _b64(prepare_image(item.image))}}
+            {"inline_data": {"mime_type": "image/jpeg", "data": _b64(prepare_image(item.cutout))}}
+        )
+        parts.append({"text": f"id={item.id} - CONTEXT:"})
+        parts.append(
+            {"inline_data": {"mime_type": "image/jpeg", "data": _b64(prepare_image(item.context))}}
         )
     return {
         "contents": [{"parts": parts}],

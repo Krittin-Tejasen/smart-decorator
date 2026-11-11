@@ -1514,11 +1514,16 @@ def _padded_crop(img: Image.Image, bbox: BoundingBox, pad_frac: float = 0.6) -> 
 
 
 async def _verify_items(items: list[FurnitureItem], img: Image.Image) -> None:
-    """One Gemini call for the whole room: does each item's padded crop
-    (its box plus surrounding context, not the tight display cutout) really
-    look like its detected label? Sets `verified_type` in place; never
-    raises, and a missing id just leaves that item's `verified_type` as
-    None - not yet consumed by matching, see FurnitureItem.verified_type."""
+    """One Gemini call for the whole room: given each item's exact cutout
+    plus a padded context crop, does the detected label hold up? Sending
+    both targets two failure modes found on real photos: the tight cutout
+    alone is sometimes genuinely ambiguous (a plain table reads just as
+    plausibly as a bench) without context, but context alone can mis-pick
+    a neighbouring object in a dense scene (a chair's box swamped by the
+    dining table beside it) without knowing exactly which pixels are the
+    item. Sets `verified_type` in place; never raises, and a missing id
+    just leaves that item's `verified_type` as None - not yet consumed by
+    matching, see FurnitureItem.verified_type."""
     if not items:
         return
     try:
@@ -1526,7 +1531,8 @@ async def _verify_items(items: list[FurnitureItem], img: Image.Image) -> None:
             VerifyInput(
                 id=item.id,
                 label=item.label,
-                image=_padded_crop(img, item.bbox),
+                cutout=_decode_data_url_image(item.cutout_image or item.crop_image),
+                context=_padded_crop(img, item.bbox),
             )
             for item in items
         ]
