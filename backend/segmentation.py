@@ -426,25 +426,44 @@ def _jpeg_data_url(image: Image.Image) -> str:
     return _build_data_url(buf.getvalue(), "image/jpeg")
 
 
-# A SAM 2 mask covering less than this share of its own detection box is almost
-# always a mis-segmentation (a handle, a shadow) — treat it as "no real mask"
-# rather than hand the client an empty-looking cut-out.
+# Two independent checks on a SAM 2 mask before it's trusted as "precise":
+#   - _MIN_MASK_COVERAGE: how densely it fills its OWN tight bbox (not the
+#     full declared detection box - see below). Catches a sparse/scattered
+#     mis-segmentation (a handle, a shadow), which stays sparse even inside
+#     its own small bbox.
+#   - _MIN_MASK_AREA_FRAC: how big it is relative to the WHOLE image. Catches
+#     a mask that's small in absolute terms (a stray fleck, noise) even if
+#     it happens to be solid - density alone can't tell a real tiny patch
+#     from a believable small fragment.
+# Coverage is judged against the mask's own tight bbox rather than the full
+# declared box on purpose: a detector box drawn too large for a heavily
+# occluded item (e.g. a dining chair tucked mostly under the table, where the
+# box reaches down to cover the tabletop too) would otherwise always read as
+# "low coverage" no matter how solid the real, small, visible fragment is -
+# an oversized box is the thing being occluded around, not a property of the
+# mask itself. The area-of-whole-image check still rejects a mask that's
+# genuinely tiny no matter how the box was drawn.
 _MIN_MASK_COVERAGE = 0.05
+_MIN_MASK_AREA_FRAC = 0.0005
 
 
 def _cutout_from_mask(
     img: Image.Image, mask: Image.Image, box_px: tuple[int, int, int, int]
 ) -> Image.Image | None:
     """Transparent-background cut-out of `img` under `mask`, trimmed to the
-    mask's own extent inside `box_px`. None if the mask is empty/too small."""
+    mask's own extent inside `box_px`. None if the mask is empty, too sparse,
+    or too small in absolute terms (see the two constants above)."""
     region = mask.crop(box_px).point(lambda v: 255 if v > 127 else 0)
     tight = region.getbbox()
     if tight is None:
         return None
 
-    box_area = max((box_px[2] - box_px[0]) * (box_px[3] - box_px[1]), 1)
+    tight_area = max((tight[2] - tight[0]) * (tight[3] - tight[1]), 1)
     covered = sum(region.histogram()[255:])
-    if covered / box_area < _MIN_MASK_COVERAGE:
+    if covered / tight_area < _MIN_MASK_COVERAGE:
+        return None
+    img_area = img.size[0] * img.size[1]
+    if covered / img_area < _MIN_MASK_AREA_FRAC:
         return None
 
     x0, y0 = box_px[0], box_px[1]

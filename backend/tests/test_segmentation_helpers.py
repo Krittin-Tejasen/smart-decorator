@@ -423,6 +423,40 @@ class BuildItemTests(unittest.TestCase):
         self.assertFalse(item.mask_precise)
         self.assertIsNone(item.cutout_image)
 
+    def test_a_small_solid_fragment_in_an_oversized_occlusion_box_is_still_precise(self):
+        # A detection box drawn much bigger than the real (heavily occluded)
+        # object - e.g. a dining chair tucked under a table, where the box
+        # reaches down to cover the tabletop too. The real visible fragment
+        # (a solid 40x40 patch) is a tiny fraction of the declared box, but
+        # densely filled within its own small extent - this should NOT be
+        # treated as "no real mask" just because the box was drawn too big.
+        mask = Image.new("L", (400, 400), 0)
+        ImageDraw.Draw(mask).rectangle((90, 165, 129, 204), fill=255)  # 40x40, solid
+        item = self.build(mask)  # box is (80,160)-(320,340): 240x180 = 43200px
+        self.assertTrue(item.mask_precise)
+        self.assertIsNotNone(item.cutout_image)
+        import base64, io
+        cut = Image.open(io.BytesIO(base64.b64decode(item.cutout_image.split(",", 1)[1])))
+        # trimmed to the real fragment, not the much larger declared box
+        self.assertEqual(cut.size, (40, 40))
+
+    def test_a_sparse_mask_scattered_across_a_big_bbox_is_still_treated_as_no_mask(self):
+        # Noise/mis-segmentation (a handle, a shadow) typically scatters
+        # pixels across a wide area rather than filling a small area solidly.
+        # Total covered area here (360px) clears the absolute-size floor on
+        # its own, so it's specifically the own-tight-bbox density check
+        # (~0.8%, well under 5%) that must reject this, not the size floor.
+        sparse = Image.new("L", (400, 400), 0)
+        draw = ImageDraw.Draw(sparse)
+        for x, y in (
+            (100, 160), (160, 170), (220, 165), (280, 175), (340, 160),
+            (110, 260), (170, 270), (230, 255), (290, 265), (350, 260),
+        ):
+            draw.rectangle((x, y, x + 5, y + 5), fill=255)  # 6x6 = 36px each
+        item = self.build(sparse)
+        self.assertFalse(item.mask_precise)
+        self.assertIsNone(item.cutout_image)
+
     def test_thumbnails_are_capped(self):
         big = Image.new("RGB", (2000, 2000), (10, 200, 10))
         item = seg._build_item(big, "rug", 0.9, 0, 0.0, 0.0, 1.0, 1.0, None)
