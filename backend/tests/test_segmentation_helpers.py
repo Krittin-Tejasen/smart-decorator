@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -676,6 +677,38 @@ class SamMaskTests(unittest.TestCase):
         dets = [{"box": (0.2, 0.2, 0.8, 0.9), "mask": mask}]
         seg._settle_masks(dets, 100, 100)
         self.assertEqual(dets[0]["box"], (0.18, 0.2, 0.8, 0.95))
+
+    def test_a_piece_split_in_two_by_an_overlap_keeps_only_the_bigger_half(self):
+        # A real case on a real photo: a floor lamp overlapping an office
+        # chair lost a pixel-splitting contest and kept 60% of its area
+        # split into several disconnected, similarly-sized pieces (none
+        # small enough to be a "stray blob" by share-of-the-max alone) -
+        # too scattered to read as a lamp. Reproduced minimally: a wide
+        # strip (sofa) with a small box (vase) carved out of its middle,
+        # splitting it into two separate halves.
+        strip = _rect_mask(100, 100, 0, 40, 100, 60)     # rows 40-60, full width: area 2000
+        small = _rect_mask(100, 100, 45, 40, 55, 60)     # rows 40-60, cols 45-55: area 200 (<40% of 2000)
+        dets = [
+            {"box": (0.0, 0.4, 1.0, 0.6), "mask": Image.fromarray(strip.astype("uint8") * 255, mode="L"), "label": "sofa"},
+            {"box": (0.45, 0.4, 0.55, 0.6), "mask": Image.fromarray(small.astype("uint8") * 255, mode="L"), "label": "vase"},
+        ]
+        seg._settle_masks(dets, 100, 100)
+        sofa_mask = np.asarray(dets[0]["mask"]) > 127
+        n, _, stats, _ = cv2.connectedComponentsWithStats(sofa_mask.astype("uint8"), connectivity=8)
+        self.assertEqual(n - 1, 1, "only one connected piece should remain, not both split halves")
+        self.assertFalse(dets[0]["swallowed"])  # one whole half (900px) is still well over the 30% floor
+
+    def test_a_mask_with_two_genuine_parts_is_untouched_when_nothing_overlaps_it(self):
+        # A legitimate multi-part mask (e.g. a bed's headboard apart from its
+        # body) must not be chopped down to one piece just because it has
+        # more than one connected component - only resolve_overlaps actually
+        # taking pixels away should trigger the stray-fragment check.
+        two_parts = _rect_mask(100, 100, 10, 10, 30, 30) | _rect_mask(100, 100, 60, 60, 90, 90)
+        dets = [{"box": (0.1, 0.1, 0.9, 0.9), "mask": Image.fromarray(two_parts.astype("uint8") * 255, mode="L"), "label": "bed"}]
+        seg._settle_masks(dets, 100, 100)
+        mask = np.asarray(dets[0]["mask"]) > 127
+        n, _, _, _ = cv2.connectedComponentsWithStats(mask.astype("uint8"), connectivity=8)
+        self.assertEqual(n - 1, 2, "both original parts must survive untouched")
 
 
 if __name__ == "__main__":

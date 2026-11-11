@@ -1437,6 +1437,35 @@ def relabel_with_clip(img: Image.Image, detections: list[dict]) -> None:
 _MIN_KEPT_MASK_SHARE = 0.3
 
 
+def _drop_stray_fragments(mask):
+    """Keep only the single largest connected component. Stricter than
+    `clean_mask`'s own "drop anything under `_MIN_COMPONENT_SHARE` of the
+    largest" rule (which legitimately keeps several real pieces of a raw SAM
+    2 mask, e.g. a bed's headboard apart from its body) - this instead
+    handles what resolve_overlaps' pixel-by-pixel split can do to an
+    already-clean mask, which a share-of-the-max rule doesn't catch: a real
+    case found on a real photo had a floor lamp overlapping an office chair
+    lose a pixel-splitting contest and keep 60% of its original area split
+    into 3 similarly-sized disconnected pieces (none under 25% of the
+    biggest, so none dropped by that rule) too scattered to read as a lamp.
+    A post-split survivor isn't expected to have several genuine separate
+    parts the way a single raw mask can - if it does, that split was noise,
+    not signal, and the single biggest remaining piece is the best guess at
+    what's real (small enough on its own to get marked `swallowed` below,
+    when the split truly gutted it)."""
+    import cv2
+    import numpy as np
+
+    if not mask.any():
+        return mask
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype("uint8"), connectivity=8)
+    if n <= 2:  # background + at most one component - nothing to drop
+        return mask
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    biggest = int(np.argmax(areas)) + 1
+    return labels == biggest
+
+
 def _settle_masks(detections: list[dict], W: int, H: int) -> None:
     """Split shared pixels between overlapping masks, then grow each box to
     cover its whole mask — the padded SAM 2 prompt may reach past DINO's box,
@@ -1451,6 +1480,12 @@ def _settle_masks(detections: list[dict], W: int, H: int) -> None:
         d["mask"] = np.asarray(d["mask"].convert("L")) > 127
     before = [int(d["mask"].sum()) for d in with_masks]
     resolve_overlaps(with_masks)
+    for d, area in zip(with_masks, before):
+        # Only a detection that actually lost pixels to resolve_overlaps is
+        # at risk of this - leaves a mask nobody touched (e.g. a union-label
+        # mask with a real, intentional gap like a bed's headboard) alone.
+        if d["mask"].sum() < area:
+            d["mask"] = _drop_stray_fragments(d["mask"])
     for d, area in zip(with_masks, before):
         d["swallowed"] = area > 0 and d["mask"].sum() < area * _MIN_KEPT_MASK_SHARE
     for d in with_masks:
