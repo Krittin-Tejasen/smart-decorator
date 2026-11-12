@@ -138,8 +138,8 @@ class MetadataFilterTests(unittest.TestCase):
 
     def test_colour_only(self):
         f = mf.metadata_filter(self.brown, None)
-        self.assertEqual(set(f), {"color"})
-        self.assertIn("brown", f["color"]["$in"])
+        self.assertEqual(set(f), {"measured_color"})
+        self.assertIn("brown", f["measured_color"]["$in"])
 
     def test_material_only_any_of_the_items_materials(self):
         f = mf.metadata_filter(None, self.wood_fabric)
@@ -147,7 +147,7 @@ class MetadataFilterTests(unittest.TestCase):
 
     def test_both_are_combined(self):
         f = mf.metadata_filter(self.brown, self.wood_fabric)
-        self.assertEqual(set(f), {"color", "$or"})
+        self.assertEqual(set(f), {"measured_color", "$or"})
 
     def test_nothing_to_filter_on_gives_an_empty_filter(self):
         self.assertEqual(mf.metadata_filter(), {})
@@ -159,7 +159,7 @@ class MetadataFilterTests(unittest.TestCase):
 
 
 class FilterLadderTests(unittest.TestCase):
-    extra = {"color": {"$in": ["brown", "black"]}, "$or": [{"is_wood": {"$eq": True}}]}
+    extra = {"measured_color": {"$in": ["brown", "black"]}, "$or": [{"is_wood": {"$eq": True}}]}
 
     def test_without_an_extra_filter_the_levels_are_unchanged(self):
         levels = pm.build_filter_ladder("armchair", 100, 900)
@@ -169,25 +169,25 @@ class FilterLadderTests(unittest.TestCase):
     def test_the_extra_filter_is_part_of_the_type_level(self):
         (level,) = pm.build_filter_ladder("armchair", extra_filter=self.extra)
         self.assertEqual(level.filter["furniture_type"], {"$eq": "armchair"})
-        self.assertEqual(level.filter["color"], {"$in": ["brown", "black"]})
+        self.assertEqual(level.filter["measured_color"], {"$in": ["brown", "black"]})
         self.assertEqual(level.filter["$or"], [{"is_wood": {"$eq": True}}])
 
     def test_it_is_in_every_level_never_relaxed_away(self):
         levels = pm.build_filter_ladder("armchair", in_stock_only=True, extra_filter=self.extra)
         self.assertEqual([lv.name for lv in levels], ["type+stock", "type"])
         for level in levels:
-            self.assertIn("color", level.filter)
+            self.assertIn("measured_color", level.filter)
             self.assertIn("$or", level.filter)
 
     def test_it_also_applies_to_the_image_only_levels(self):
         levels = pm.build_filter_ladder(None, in_stock_only=True, extra_filter=self.extra)
         self.assertEqual([lv.name for lv in levels], ["stock", "image_only"])
-        self.assertTrue(all("color" in lv.filter for lv in levels))
+        self.assertTrue(all("measured_color" in lv.filter for lv in levels))
 
     def test_the_callers_dict_is_not_modified(self):
-        extra = {"color": {"$in": ["brown"]}}
+        extra = {"measured_color": {"$in": ["brown"]}}
         pm.build_filter_ladder("armchair", 1, 2, extra_filter=extra)
-        self.assertEqual(extra, {"color": {"$in": ["brown"]}})
+        self.assertEqual(extra, {"measured_color": {"$in": ["brown"]}})
 
 
 class FindCandidatesFilterTests(unittest.TestCase):
@@ -207,9 +207,9 @@ class FindCandidatesFilterTests(unittest.TestCase):
         return sent
 
     def test_the_colour_condition_is_sent_with_the_type(self):
-        sent = self.run_match(max_price=5000, extra_filter={"color": {"$in": ["brown"]}})
+        sent = self.run_match(max_price=5000, extra_filter={"measured_color": {"$in": ["brown"]}})
         self.assertEqual(len(sent), 1)
-        self.assertEqual(sent[0]["color"], {"$in": ["brown"]})
+        self.assertEqual(sent[0]["measured_color"], {"$in": ["brown"]})
         self.assertEqual(sent[0]["furniture_type"], {"$eq": "armchair"})
         self.assertEqual(sent[0]["thb_price"], {"$lte": 5000.0})
 
@@ -218,7 +218,7 @@ class FindCandidatesFilterTests(unittest.TestCase):
         self.assertEqual(set(sent[0]), {"furniture_type"})
 
     def test_an_empty_answer_is_not_retried_without_the_filter(self):
-        sent = self.run_match(extra_filter={"color": {"$in": ["brown"]}})
+        sent = self.run_match(extra_filter={"measured_color": {"$in": ["brown"]}})
         self.assertEqual(len(sent), 1)           # one query: nothing is relaxed
 
 
@@ -247,7 +247,7 @@ class EndpointFilterTests(unittest.TestCase):
     def test_colours_become_a_colour_filter(self):
         colors = json.dumps([{"catalog_color": "brown", "share": 1}])
         extra, body = self.sent_filter(colors=colors)
-        self.assertIn("brown", extra["color"]["$in"])
+        self.assertIn("brown", extra["measured_color"]["$in"])
         self.assertNotIn("$or", extra)
         self.assertEqual(body["filters"], ["color"])
 
@@ -261,7 +261,7 @@ class EndpointFilterTests(unittest.TestCase):
         colors = json.dumps([{"catalog_color": "beige", "share": 1}])
         materials = json.dumps([{"name": "metal", "confidence": 0.9}])
         extra, body = self.sent_filter(colors=colors, materials=materials)
-        self.assertEqual(set(extra), {"color", "$or"})
+        self.assertEqual(set(extra), {"measured_color", "$or"})
         self.assertEqual(body["filters"], ["color", "material"])
 
     def test_without_the_fields_there_is_no_filter(self):
