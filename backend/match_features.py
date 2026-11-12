@@ -6,21 +6,28 @@ filter for /match-products (product_matching.py), used only when the user
 switches the Colour / Material filter on in the app.
 
 What the filter says
-- Colour: keep products whose catalog colour word (`color_extracted`, one of 12)
-  is one of the item's colours (each with >= 20% of its pixels, else its main
-  colour) or a neighbouring word (similar enough, see COLOR_SIMILARITY), so a
-  brown item also keeps beige and dark-brown-ish products.
+- Colour: keep products whose catalog colour word (`measured_color`, one of 12
+  - our own photo-measured colour, not the catalog's original `color_extracted`
+  tag, see catalog_colour.py/measure_catalog_colours.py - fixes the common
+  carcass-vs-front mislabel, e.g. a navy-fronted cabinet the catalog only
+  called "white") is one of the item's colours (each with >= 20% of its
+  pixels, else its main colour) or a neighbouring word (similar enough, see
+  COLOR_SIMILARITY), so a brown item also keeps beige and dark-brown-ish
+  products.
 - Material: keep products tagged with any of the item's materials, using the
   catalog's flags (is_wood / is_fabric / is_metal / is_glass). Fine words are
   folded into those groups (rattan -> wood, leather -> fabric). Plastic,
   ceramic, stone and paper cannot be filtered: the catalog tags plastic on
   ~76% of rows and has no ceramic/stone/paper tag, so they add no condition.
 
-It is a hard filter, so it can leave nothing: the catalog's colour is one word
-per product and often only the carcass colour, and its material tags are the
-same few words on most products. On 33 real items (5 saved rooms) colour with
-neighbours left no item empty, colour + material left 4 of 28. An empty answer is
-shown as such in the app, which tells the user to switch the filter off.
+It is a hard filter, so it can leave nothing: even the corrected catalog
+colour is one word per product, and material tags are the same few words on
+most products. On 33 real items (5 saved rooms, measured against the older
+`color_extracted` field) colour with neighbours left no item empty, colour +
+material left 4 of 28 - `measured_color` has the same 12-word vocabulary and
+neighbour logic, just more accurate values, so this should not get stricter.
+An empty answer is shown as such in the app, which tells the user to switch
+the filter off.
 """
 
 from __future__ import annotations
@@ -147,7 +154,7 @@ def metadata_filter(
     out: dict[str, Any] = {}
     words = colour_words(item_colors or [])
     if words:
-        out["color"] = {"$in": words}
+        out["measured_color"] = {"$in": words}
     flags = material_flags(item_materials or [])
     if flags:
         out["$or"] = [{flag: {"$eq": True}} for flag in flags]
