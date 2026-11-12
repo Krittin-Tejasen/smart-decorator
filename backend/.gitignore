@@ -15,3 +15,6 @@ compare/
 
 # Local progress/snapshots of the scripts/ catalog jobs
 scripts/.*.json
+
+# Room evaluation output (generated images, cutouts, results)
+eval_out/
