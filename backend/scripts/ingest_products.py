@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.embedding import download_image, encode_images
-from app.services.furniture_types import types_by_unique_id
+from app.services.furniture_types import subtypes_by_unique_id, types_by_unique_id
 from app.services.pinecone_client import upsert_batch
 from app.services.product_repo import fetch_all_products
 
@@ -52,7 +52,9 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def build_metadata(row: dict[str, Any], furniture_type: str | None = None) -> dict[str, Any]:
+def build_metadata(
+    row: dict[str, Any], furniture_type: str | None = None, furniture_subtype: str | None = None
+) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "sku": row.get("sku") or "",
         "main_title": row.get("main_title") or "",
@@ -83,6 +85,9 @@ def build_metadata(row: dict[str, Any], furniture_type: str | None = None) -> di
     # unknown, so a filter on it never returns an untyped product.
     if furniture_type:
         metadata["furniture_type"] = furniture_type
+    # floor / table / pendant ... for lamps; the query tries it before the type.
+    if furniture_subtype:
+        metadata["furniture_subtype"] = furniture_subtype
 
     return metadata
 
@@ -111,6 +116,7 @@ def main() -> None:
     products = fetch_all_products()
     print(f"Loaded {len(products)} rows.")
     furniture_types = types_by_unique_id(products)
+    furniture_subtypes = subtypes_by_unique_id(products, furniture_types)
 
     done_ids = load_checkpoint()
     pending = [row for row in products if str(row.get("unique_id")) not in done_ids]
@@ -132,7 +138,11 @@ def main() -> None:
                     {
                         "id": str(row["unique_id"]),
                         "values": vector,
-                        "metadata": build_metadata(row, furniture_types.get(str(row["unique_id"]))),
+                        "metadata": build_metadata(
+                            row,
+                            furniture_types.get(str(row["unique_id"])),
+                            furniture_subtypes.get(str(row["unique_id"])),
+                        ),
                     }
                     for row, vector in zip(rows, vectors)
                 ]
