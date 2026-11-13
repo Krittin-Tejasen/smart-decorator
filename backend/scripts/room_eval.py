@@ -382,7 +382,13 @@ async def compose_with_products(
             json=payload,
         )
         response.raise_for_status()
-    return response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    text = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    # The app's system prompt now also asks for a furniture-plan JSON block after
+    # the paragraph (generation.compose_design_prompt's hint extraction) - this
+    # reuses that same system prompt verbatim, so it must strip the block the
+    # same way, or the marker + raw JSON leaks into the room's design prompt.
+    paragraph, _, _ = text.partition(generation._FURNITURE_JSON_MARKER)
+    return paragraph.strip()
 
 
 def app_prompt(paragraph: str | None, room_type: str, style: str, color: str, products: list[dict[str, Any]]) -> str:
