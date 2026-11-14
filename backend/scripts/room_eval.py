@@ -351,8 +351,13 @@ def product_clause(products: list[dict[str, Any]]) -> str:
 
 async def compose_with_products(
     room_type: str, style: str, color: str, photo: bytes, mime_type: str, candidates: list[dict[str, Any]], note: str | None = None
-) -> str:
-    """generation.compose_design_prompt with the products to choose from in its message."""
+) -> tuple[str, dict[str, int]]:
+    """generation.compose_design_prompt with the products to choose from in its message.
+    Returns the answer (paragraph + the "PRODUCTS:" choice line, for
+    parse_composer_choice to split) and the furniture-plan hints dict, same
+    shape as compose_design_prompt's own return - the app's own segmentation
+    vocabulary narrowing (run_segmentation's `hints` param) depends on this,
+    see cmd_segment."""
     import generation
 
     payload = {
@@ -387,8 +392,11 @@ async def compose_with_products(
     # the paragraph (generation.compose_design_prompt's hint extraction) - this
     # reuses that same system prompt verbatim, so it must strip the block the
     # same way, or the marker + raw JSON leaks into the room's design prompt.
-    paragraph, _, _ = text.partition(generation._FURNITURE_JSON_MARKER)
-    return paragraph.strip()
+    # The block itself is kept (not discarded) - it's the same hints dict the
+    # real app would pass to run_segmentation, see compose_design_prompt.
+    paragraph, marker, furniture_block = text.partition(generation._FURNITURE_JSON_MARKER)
+    hints = generation._parse_hints_from_text(furniture_block) if marker else {}
+    return paragraph.strip(), hints
 
 
 def app_prompt(paragraph: str | None, room_type: str, style: str, color: str, products: list[dict[str, Any]]) -> str:
@@ -503,14 +511,14 @@ def prepare_room(
         )
     # Without --composer the photo goes to no model but Muse Image, and the
     # prompt is the app's static one (what the app sends when its composer fails).
-    paragraph, composer_error, answer = None, "not used", None
+    paragraph, composer_error, answer, hints = None, "not used", None, {}
     if args.composer:
         try:
-            answer = asyncio.run(compose_with_products(room_type, style, color, source.read_bytes(), mime_type, candidates))
+            answer, hints = asyncio.run(compose_with_products(room_type, style, color, source.read_bytes(), mime_type, candidates))
             paragraph, picked = parse_composer_choice(answer, len(candidates))
             composer_error = None
         except Exception as exc:  # the app falls back to its static prompt; so does this
-            paragraph, composer_error = None, f"{type(exc).__name__}: {exc}"
+            paragraph, composer_error, hints = None, f"{type(exc).__name__}: {exc}", {}
     if paragraph is None:
         picked = list(range(len(candidates)))
     # One product per kind: the composer may pick two chairs; the first counts.
@@ -536,6 +544,9 @@ def prepare_room(
             "composer_answer": answer,
             "composer_paragraph": paragraph,
             "composer_error": composer_error,
+            # The per-room furniture-plan hints the real app would pass to
+            # run_segmentation to narrow its detector vocabulary - see cmd_segment.
+            "hints": hints,
             "prompt": app_prompt(paragraph, room_type, style, color, products),
         },
     }
@@ -617,7 +628,7 @@ def cmd_recompose(args: argparse.Namespace) -> None:
         sys.exit(f"{args.room} is generated already; its answers can't change.")
     app = room["app"]
     source = run / "sources" / app["source"]
-    answer = asyncio.run(
+    answer, hints = asyncio.run(
         compose_with_products(app["room_type"], app["style"], app["color"], source.read_bytes(), app["source_mime"], room["candidates"], args.note)
     )
     paragraph, picked = parse_composer_choice(answer, len(room["candidates"]))  # a doubtful pick stops here, nothing written
@@ -627,6 +638,7 @@ def cmd_recompose(args: argparse.Namespace) -> None:
         composer_paragraph=paragraph,
         composer_error=None,
         composer_note=args.note,
+        hints=hints,
         prompt=app_prompt(paragraph, app["room_type"], app["style"], app["color"], room["products"]),
     )
     write_json(run / "manifest.json", manifest)
@@ -934,7 +946,12 @@ def cmd_segment(args: argparse.Namespace) -> None:
         if out.exists() or not picture.exists():
             continue
         started = time.monotonic()
-        result = asyncio.run(run_segmentation(picture.read_bytes(), "image/png"))
+        # The composer's furniture-plan hints (prepare_room/compose_with_products) -
+        # same vocabulary-narrowing the real app passes to run_segmentation from
+        # compose_design_prompt's own hints. Empty/missing falls back to the full
+        # static vocabulary, same as run_segmentation's own default.
+        hints = (room.get("app") or {}).get("hints") or {}
+        result = asyncio.run(run_segmentation(picture.read_bytes(), "image/png", hints=hints))
         # A Gemini box isn't what the app searches with, so it can't be scored with the rest.
         if result.method != SEGMENTATION_METHOD:
             sys.exit(f"{room['id']}: segmentation fell back to {result.method} ({result.fallback_reason}). Nothing was saved for this room.")
@@ -946,6 +963,10 @@ def cmd_segment(args: argparse.Namespace) -> None:
                     "id": stem,
                     "label": item.label,
                     "type": label_to_type(item.label),
+                    # Set only when GEMINI_API_KEY is configured - the app's own
+                    # label-verification agent (segmentation.py's _verify_items);
+                    # mirrors FurnitureItem.verified_type, see cmd_match.
+                    "verified_type": item.verified_type,
                     "confidence": item.confidence,
                     "bbox": item.bbox.model_dump(),
                     "mask_precise": item.mask_precise,
@@ -1487,9 +1508,14 @@ def cmd_match(args: argparse.Namespace) -> None:
             name = detection["cutout"] or detection["crop"]
             image = Image.open(run / "cutouts" / name)
             image.load()
-            # As the app searches: with the detector's label. Then with the
-            # right type, which leaves the label out and measures the search alone.
-            system = search_record(find_candidates(image, detection["label"], min_score=0.0))
+            # As the app searches: with the detector's label, overridden by the
+            # verification agent's type when it ran (GEMINI_API_KEY set at segment
+            # time) - same precedence as /match-products' furniture_type param.
+            # Then with the right type, which leaves the label out and measures
+            # the search alone.
+            system = search_record(
+                find_candidates(image, detection["label"], min_score=0.0, furniture_type=detection.get("verified_type"))
+            )
             oracle = search_record(find_candidates(image, detection["label"], min_score=0.0, furniture_type=types[group]))
             matched[detection["id"]] = {
                 "query": "cutout" if detection["cutout"] else "crop",

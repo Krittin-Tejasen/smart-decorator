@@ -201,6 +201,12 @@ def detection_outcome(
         "verdict": detection.get("verdict"),
         "label": detection.get("label"),
         "label_ok": detection.get("type") == product["type"],
+        # What the detector's own label would have guessed, kept alongside -
+        # display-only, never counted: label_ok/searches above still judge the
+        # raw label, so verification correcting a wrong one isn't hidden as a
+        # metrics improvement that didn't actually happen at the label step.
+        "verified_type": detection.get("verified_type"),
+        "verified_type_changed": bool(detection.get("verified_type")) and detection.get("verified_type") != detection.get("type"),
         "rank": rank,
         "rank_with_floor": rank if answer_score is not None and answer_score >= floor else None,
         "equivalent_rank": equivalent,
