@@ -72,6 +72,10 @@ Env vars
   SEGMENTATION_DEVICE       Force "cuda" or "cpu" (default: auto-detect via torch.cuda.is_available())
   SAM_BOX_THRESHOLD         Confidence threshold for detection boxes (default: 0.30)
   SAM_TEXT_THRESHOLD        Text-matching threshold for Grounding DINO (default: 0.25)
+  SAM_CURTAIN_BOX_THRESHOLD Confidence threshold for the curtain/blinds-only DINO pass
+                            (default: 0.20; lower than furniture — curtains . blinds . has
+                            no "window"/"door" in it, so it can't be collapsed to architecture
+                            by canonicalize_label the way the main pass's "curtain window" can)
   SAM_BOX_PAD               Grow each DINO box by this share of its size before SAM 2 (default: 0,
                             DINO's own box; padding mostly pulled in wall and floor)
   SAM_MULTIMASK             1 = ask SAM 2 for 3 candidate masks and pick the largest likely one,
@@ -966,13 +970,27 @@ _OPENING_PROMPT = "doorway . open door ."
 # the sill check) catch what a lower bar lets in.
 _OPENING_BOX_THRESHOLD = 0.25
 
+# A third, curtain/blinds-only pass, with no "window" or "door" in its prompt.
+# In the full prompt, DINO's grounded text for a curtain box is often glued
+# with "window" ("curtain window", like "blinds window" below) because the
+# curtain hangs right on the window it was matched beside; canonicalize_label
+# then has to prefer the architecture word (a wardrobe boxed with "door" must
+# come back as "door", not a shoppable wardrobe), so the curtain is dropped as
+# architecture too. Asking for just "curtain . blinds ." removes "window" from
+# the vocabulary DINO can even answer with, so this pass can't glue it on.
+_CURTAIN_PROMPT = "curtain . blinds ."
+_CURTAIN_BOX_THRESHOLD_ENV = "SAM_CURTAIN_BOX_THRESHOLD"
+_CURTAIN_BOX_THRESHOLD_DEFAULT = 0.20
+
 
 def _detect_with_grounding_dino_local(img: Image.Image) -> list[dict]:
     openings = [
         {**d, "label": "doorway"}
         for d in _run_grounding_dino(img, _OPENING_PROMPT, _OPENING_BOX_THRESHOLD)
     ]
-    return _run_grounding_dino(img, _FURNITURE_PROMPT) + openings
+    curtain_threshold = float(os.getenv(_CURTAIN_BOX_THRESHOLD_ENV, str(_CURTAIN_BOX_THRESHOLD_DEFAULT)))
+    curtains = _run_grounding_dino(img, _CURTAIN_PROMPT, curtain_threshold)
+    return _run_grounding_dino(img, _FURNITURE_PROMPT) + openings + curtains
 
 
 def _run_grounding_dino(img: Image.Image, prompt: str, box_threshold: float | None = None) -> list[dict]:
