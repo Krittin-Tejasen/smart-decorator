@@ -106,6 +106,33 @@ class _TestScreenState extends ConsumerState<TestScreen> {
     }
   }
 
+  Future<void> _saveScanOnly() async {
+    final appState = ref.read(appStateProvider);
+    final scan = appState.scanSpatialData;
+    final ar = appState.arCaptureState;
+    if (scan == null && ar == null) return;
+
+    try {
+      final path = await DatasetService.saveSession(
+        mode: 'scan_only',
+        scanSummary: scan ?? {},
+        arCaptureJson: ar?.toJson(),
+        furniture: const [],
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Scan saved: ${path.split('/').last}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Save failed: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _saveDataset() async {
     final appState = ref.read(appStateProvider);
     final scan = appState.scanSpatialData;
@@ -135,6 +162,7 @@ class _TestScreenState extends ConsumerState<TestScreen> {
     }
 
     try {
+      final ar = appState.arCaptureState;
       final path = await DatasetService.saveSession(
         mode: _simulateUpload ? 'estimated' : 'lidar',
         scanSummary: {
@@ -143,6 +171,7 @@ class _TestScreenState extends ConsumerState<TestScreen> {
           'area_m2': areaM2,
           'corner_count': cornerCount,
         },
+        arCaptureJson: ar?.toJson(),
         furniture: _results,
       );
       setState(() => _savedPath = path);
@@ -179,6 +208,17 @@ class _TestScreenState extends ConsumerState<TestScreen> {
           _SectionHeader('Step 1 — Source data'),
           const SizedBox(height: 8),
           _ScanSummaryCard(image: image, scan: scan, hasScan: hasScan),
+          if (hasScan || appState.arCaptureState != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _saveScanOnly,
+              icon: const Icon(Icons.save_rounded),
+              label: const Text('Save Scan Data'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(44),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           _SectionHeader('Step 2 — Mode'),
           const SizedBox(height: 8),
