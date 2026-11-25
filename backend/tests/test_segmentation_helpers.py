@@ -67,6 +67,19 @@ class LabelTests(unittest.TestCase):
         for raw, expected in cases.items():
             self.assertEqual(seg.canonicalize_label(raw), expected, raw)
 
+    def test_wall_pass_labels_map_onto_the_main_vocabulary(self):
+        cases = {
+            "artwork": "artwork",
+            "mirror": "mirror",
+            "vase": "vase",
+            "picture frame": "artwork",
+            "painting": "artwork",
+            "painting picture frame": "artwork",
+            "furniture": None,  # canonicalize_label's answer for a box with no text
+        }
+        for raw, expected in cases.items():
+            self.assertEqual(seg.wall_pass_label(seg.canonicalize_label(raw) if raw != "furniture" else raw), expected, raw)
+
     def test_a_door_or_window_match_wins_over_the_furniture_word_beside_it(self):
         # Real raw labels from Grounding DINO on a generated room.
         self.assertEqual(seg.canonicalize_label("blinds window"), "window")
@@ -234,6 +247,24 @@ class DedupeTests(unittest.TestCase):
         headboard["mask"] = img(_rect_mask(100, 100, 10, 30, 30, 55))
         self.assertEqual(seg.merge_parts_into_hosts([bed, headboard]), [bed])
         self.assertTrue((np.asarray(bed["mask"]) > 127)[35, 15])
+
+    def test_a_mirror_on_the_wall_inside_a_four_poster_box_stays(self):
+        # 24-image answer key: a round mirror on the wall behind a four-poster,
+        # inside the frame's box but nowhere near the headboard.
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.75, (0.19, 0.19, 0.97, 0.92))
+        mirror = self.det("mirror", 0.47, (0.34, 0.40, 0.46, 0.51))
+        bed["mask"] = img(_rect_mask(100, 100, 20, 55, 97, 92))
+        mirror["mask"] = img(_rect_mask(100, 100, 34, 40, 46, 51))
+        self.assertEqual(len(seg.merge_parts_into_hosts([bed, mirror])), 2)
+
+    def test_a_photo_frame_on_the_nightstand_inside_the_bed_box_stays(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.33, 0.47, 0.73, 0.8))
+        frame = self.det("artwork", 0.34, (0.34, 0.51, 0.39, 0.59))
+        bed["mask"] = img(_rect_mask(100, 100, 40, 55, 73, 80))
+        frame["mask"] = img(_rect_mask(100, 100, 34, 51, 39, 59))
+        self.assertEqual(len(seg.merge_parts_into_hosts([bed, frame])), 2)
 
     def test_a_mirror_above_the_bed_stays(self):
         img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")

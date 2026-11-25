@@ -60,22 +60,21 @@ Setup (one-time, per machine that runs this backend)
       curl -L -o checkpoints/sam2.1_hiera_small.pt \
         https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt
 
-  Grounding DINO's weights (IDEA-Research/grounding-dino-tiny, ~660MB) are
+  Grounding DINO's weights (IDEA-Research/grounding-dino-base, ~1GB) are
   downloaded automatically from the Hugging Face Hub on first use — no
   manual step needed for that half of the pipeline.
 
 Env vars
 ────────
-  GROUNDING_DINO_MODEL      Hugging Face model id (default: IDEA-Research/grounding-dino-tiny)
+  GROUNDING_DINO_MODEL      Hugging Face model id (default: IDEA-Research/grounding-dino-base;
+                            on the 24-image answer key it found 40/52 curtains where tiny
+                            found 23, at detection F1 0.843 vs 0.800)
   SAM2_CHECKPOINT           Path to a local SAM 2.1 checkpoint (default: checkpoints/sam2.1_hiera_small.pt)
   SAM2_MODEL_CFG            Matching hydra config name (default: configs/sam2.1/sam2.1_hiera_s.yaml)
   SEGMENTATION_DEVICE       Force "cuda" or "cpu" (default: auto-detect via torch.cuda.is_available())
-  SAM_BOX_THRESHOLD         Confidence threshold for detection boxes (default: 0.30)
+  SAM_BOX_THRESHOLD         Confidence threshold for detection boxes (default: 0.25, tuned for
+                            grounding-dino-base: 0.30 lost recall, 0.20 let in too much junk)
   SAM_TEXT_THRESHOLD        Text-matching threshold for Grounding DINO (default: 0.25)
-  SAM_CURTAIN_BOX_THRESHOLD Confidence threshold for the curtain/blinds-only DINO pass
-                            (default: 0.20; lower than furniture — curtains . blinds . has
-                            no "window"/"door" in it, so it can't be collapsed to architecture
-                            by canonicalize_label the way the main pass's "curtain window" can)
   SAM_BOX_PAD               Grow each DINO box by this share of its size before SAM 2 (default: 0,
                             DINO's own box; padding mostly pulled in wall and floor)
   SAM_MULTIMASK             1 = ask SAM 2 for 3 candidate masks and pick the largest likely one,
@@ -921,7 +920,7 @@ def _get_grounding_dino() -> tuple[Any, Any, str]:
             except ImportError as exc:
                 raise HTTPException(500, _LOCAL_DEPS_HINT) from exc
 
-            model_id = os.getenv("GROUNDING_DINO_MODEL", "IDEA-Research/grounding-dino-tiny")
+            model_id = os.getenv("GROUNDING_DINO_MODEL", "IDEA-Research/grounding-dino-base")
             device = _get_device()
             processor = AutoProcessor.from_pretrained(model_id)
             model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
@@ -970,17 +969,30 @@ _OPENING_PROMPT = "doorway . open door ."
 # the sill check) catch what a lower bar lets in.
 _OPENING_BOX_THRESHOLD = 0.25
 
-# A third, curtain/blinds-only pass, with no "window" or "door" in its prompt.
-# In the full prompt, DINO's grounded text for a curtain box is often glued
-# with "window" ("curtain window", like "blinds window" below) because the
-# curtain hangs right on the window it was matched beside; canonicalize_label
-# then has to prefer the architecture word (a wardrobe boxed with "door" must
-# come back as "door", not a shoppable wardrobe), so the curtain is dropped as
-# architecture too. Asking for just "curtain . blinds ." removes "window" from
-# the vocabulary DINO can even answer with, so this pass can't glue it on.
-_CURTAIN_PROMPT = "curtain . blinds ."
-_CURTAIN_BOX_THRESHOLD_ENV = "SAM_CURTAIN_BOX_THRESHOLD"
-_CURTAIN_BOX_THRESHOLD_DEFAULT = 0.20
+# No separate curtain pass: a "curtain . blinds ." prompt has no "window"
+# decoy, so it boxed bare windows as curtains (23 wrong cards on the 24-image
+# answer key, F1 unchanged). grounding-dino-base finds the curtains from the
+# main prompt instead. See docs/curtain-dino-handoff.md.
+
+# A third pass for what hangs on or stands against the wall. grounding-dino-base
+# spreads its scores over the ~50 phrases of the main prompt, and artwork falls
+# under the bar there (24-image answer key: 19/27 artworks scored >= 0.25 in
+# the main prompt, 26/27 in this one); this pass took artwork back from 15 to
+# 19/27 at 3 wrong cards. Keep "table lamp"-like look-alikes in mind before
+# shortening it: "artwork . mirror . vase ." alone called 20 lamp bases vases.
+_WALL_PROMPT = "artwork . painting . picture frame . mirror . vase ."
+_WALL_BOX_THRESHOLD = 0.30
+_WALL_ARTWORK_WORDS = frozenset({"painting", "picture", "frame"})
+
+
+def wall_pass_label(label: str) -> str | None:
+    """The main-vocabulary name for a wall-pass box: "painting" / "picture
+    frame" are artwork. None for a box DINO gave no text ("furniture")."""
+    if label in _VOCAB_SET:
+        return label
+    if _WALL_ARTWORK_WORDS & set(label.split()):
+        return "artwork"
+    return None
 
 
 def _detect_with_grounding_dino_local(img: Image.Image) -> list[dict]:
@@ -988,9 +1000,13 @@ def _detect_with_grounding_dino_local(img: Image.Image) -> list[dict]:
         {**d, "label": "doorway"}
         for d in _run_grounding_dino(img, _OPENING_PROMPT, _OPENING_BOX_THRESHOLD)
     ]
-    curtain_threshold = float(os.getenv(_CURTAIN_BOX_THRESHOLD_ENV, str(_CURTAIN_BOX_THRESHOLD_DEFAULT)))
-    curtains = _run_grounding_dino(img, _CURTAIN_PROMPT, curtain_threshold)
-    return _run_grounding_dino(img, _FURNITURE_PROMPT) + openings + curtains
+    wall = [
+        {**d, "label": label}
+        for d in _run_grounding_dino(img, _WALL_PROMPT, _WALL_BOX_THRESHOLD)
+        if (label := wall_pass_label(d["label"])) is not None
+    ]
+    # Same piece from two passes: dedupe_detections merges it (same family).
+    return _run_grounding_dino(img, _FURNITURE_PROMPT) + openings + wall
 
 
 def _run_grounding_dino(img: Image.Image, prompt: str, box_threshold: float | None = None) -> list[dict]:
@@ -998,7 +1014,7 @@ def _run_grounding_dino(img: Image.Image, prompt: str, box_threshold: float | No
 
     processor, model, device = _get_grounding_dino()
     if box_threshold is None:
-        box_threshold = float(os.getenv("SAM_BOX_THRESHOLD", "0.30"))
+        box_threshold = float(os.getenv("SAM_BOX_THRESHOLD", "0.25"))
     text_threshold = float(os.getenv("SAM_TEXT_THRESHOLD", "0.25"))
 
     # The predictor/model objects are shared singletons — one inference at a
@@ -1468,10 +1484,25 @@ def seen_through_opening(box: tuple, openings: list[tuple]) -> bool:
 # lies this far inside that bed's or sofa's own SAM 2 mask, is part of it.
 _PART_BOX_CONTAINMENT = 0.85
 _PART_MASK_CONTAINMENT = 0.7
-# Can't stand inside a bed's or sofa's box as a piece of its own: inside that
-# box, a "mirror" or "painting" is the headboard (art above the bed hangs
-# above the box).
+# What DINO calls a bed's headboard. Folded into the bed only when shaped and
+# placed like a headboard (looks_like_headboard): the box of a four-poster or
+# canopy bed holds the wall behind it, and the box of any bed can hold the
+# photo frames on its nightstands. All 10 of these folded on the 24-image
+# answer key and the 56 generated rooms (grounding-dino-base) were real
+# mirrors and artwork, 0.06-0.15 of the bed's width; the headboards DINO
+# called "mirror" earlier spanned ~0.3 of it from the bed box's top.
 _ALWAYS_PART_LABELS = frozenset({"headboard", "mirror", "artwork", "painting"})
+_HEADBOARD_MIN_WIDTH_SHARE = 0.25   # of the bed box's width
+_HEADBOARD_MAX_TOP_GAP = 0.1        # top below the bed box's top, share of its height
+
+
+def looks_like_headboard(part: tuple, bed: tuple) -> bool:
+    px1, py1, px2, _ = part
+    bx1, by1, bx2, by2 = bed
+    return (
+        (px2 - px1) >= _HEADBOARD_MIN_WIDTH_SHARE * (bx2 - bx1)
+        and py1 - by1 <= _HEADBOARD_MAX_TOP_GAP * (by2 - by1)
+    )
 # DINO reads an armchair's seat cushion as a "stool" or "ottoman".
 _SEAT_HOSTS = frozenset({"armchair", "chair", "dining chair", "office chair"})
 _SEAT_PART_LABELS = frozenset({"ottoman", "stool"})
@@ -1507,7 +1538,8 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
     the smaller box, that piece would then take those pixels away from the
     bed. It is part of the bed when its box sits inside the bed's box and
     either SAM 2 already painted it as the bed or it's a kind of thing that
-    can't stand there on its own (_ALWAYS_PART_LABELS). Its mask joins the
+    is a bed's "mirror"/"artwork" shaped and placed like a headboard
+    (looks_like_headboard). Its mask joins the
     bed's, so the bed card shows its headboard; anything in front of it with a
     box of its own (a lamp on the nightstand) is cut back out in _settle_masks.
     A real bench at the foot of the bed reaches outside the bed's box and
@@ -1566,7 +1598,12 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
                         break
                     continue
                 in_host_mask = (mask & host_masks[id(host)]).sum() / mask.sum()
-                if det["label"] in _ALWAYS_PART_LABELS or in_host_mask >= _PART_MASK_CONTAINMENT:
+                headboard = (
+                    det["label"] in _ALWAYS_PART_LABELS
+                    and host["label"] == "bed"
+                    and looks_like_headboard(det["box"], host["box"])
+                )
+                if headboard or in_host_mask >= _PART_MASK_CONTAINMENT:
                     host_of = host
                     break
         if host_of is None:

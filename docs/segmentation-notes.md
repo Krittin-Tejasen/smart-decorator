@@ -18,7 +18,7 @@
 
 ## pipeline ปัจจุบัน
 
-1. **Grounding DINO** (`grounding-dino-tiny`) ตรวจจับด้วยรายการคำใน `_FURNITURE_PROMPT` และรันอีกรอบด้วย prompt `doorway` เพื่อหาช่องประตู
+1. **Grounding DINO** (`grounding-dino-base`, box threshold 0.25 — เปลี่ยนจาก tiny@0.30 เมื่อ 2026-11-24 ดู [curtain-dino-handoff.md](curtain-dino-handoff.md)) ตรวจจับด้วยรายการคำใน `_FURNITURE_PROMPT` รันอีกรอบด้วย prompt `doorway` เพื่อหาช่องประตู และอีกรอบด้วย `_WALL_PROMPT` (รูปภาพ กระจก แจกัน) ที่ 0.30
 2. **SAM 2** (`sam2.1_hiera_small`) ใช้แบบ mask เดียวบนกล่องของ DINO (`SAM_BOX_PAD=0`, `SAM_MULTIMASK=0`) ยกเว้นเตียง ที่ใช้ผลรวมของตัวเลือกทั้ง 3 ตัว
 3. **`clean_mask`** ลบเศษก้อน และไม่อุดรู
 4. **`select_detections`**
