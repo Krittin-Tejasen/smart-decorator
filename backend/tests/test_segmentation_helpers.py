@@ -67,6 +67,19 @@ class LabelTests(unittest.TestCase):
         for raw, expected in cases.items():
             self.assertEqual(seg.canonicalize_label(raw), expected, raw)
 
+    def test_wall_pass_labels_map_onto_the_main_vocabulary(self):
+        cases = {
+            "artwork": "artwork",
+            "mirror": "mirror",
+            "vase": "vase",
+            "picture frame": "artwork",
+            "painting": "artwork",
+            "painting picture frame": "artwork",
+            "furniture": None,  # canonicalize_label's answer for a box with no text
+        }
+        for raw, expected in cases.items():
+            self.assertEqual(seg.wall_pass_label(seg.canonicalize_label(raw) if raw != "furniture" else raw), expected, raw)
+
     def test_a_door_or_window_match_wins_over_the_furniture_word_beside_it(self):
         # Real raw labels from Grounding DINO on a generated room.
         self.assertEqual(seg.canonicalize_label("blinds window"), "window")
@@ -83,6 +96,19 @@ class LabelTests(unittest.TestCase):
         self.assertFalse(seg.is_furniture_label(" Window "))
         self.assertTrue(seg.is_furniture_label("sofa"))
         self.assertTrue(seg.is_furniture_label("curtain"))
+
+    def test_tvs_and_appliances_are_never_cards(self):
+        for label in ("tv", "TV", "television", "flat screen tv", "wall-mounted tv",
+                      "refrigerator", "stainless steel fridge", "microwave", "oven",
+                      "washing machine", "air conditioner", "ceiling fan", "speaker",
+                      "soundbar", "computer monitor"):
+            self.assertFalse(seg.is_candidate_label(label), label)
+            self.assertFalse(seg.is_furniture_label(label), label)
+
+    def test_tv_furniture_is_still_furniture(self):
+        for label in ("tv stand", "tv bench", "tv cabinet", "media console", "sofa"):
+            self.assertTrue(seg.is_furniture_label(label), label)
+        self.assertEqual(seg.canonicalize_label("tv"), "tv")
 
     def test_decoys_are_in_the_dino_prompt(self):
         self.assertIn("door", seg._VOCAB_SET)
@@ -191,6 +217,28 @@ class DedupeTests(unittest.TestCase):
         bench["mask"] = img(_rect_mask(100, 100, 30, 80, 70, 95))
         self.assertEqual(len(seg.merge_parts_into_hosts([bed, bench])), 2)
 
+    def test_a_headboard_above_the_bed_box_joins_the_bed(self):
+        # DINO's bed box stops at the mattress; the headboard stands out of it.
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.2, 0.5, 0.8, 0.9))
+        head = self.det("headboard", 0.5, (0.22, 0.3, 0.78, 0.6))
+        bed["mask"] = img(_rect_mask(100, 100, 20, 50, 80, 90))
+        head["mask"] = img(_rect_mask(100, 100, 22, 30, 78, 60))
+        self.assertEqual(seg.merge_parts_into_hosts([bed, head]), [bed])
+        self.assertTrue((np.asarray(bed["mask"]) > 127)[35, 50])
+
+    def test_a_headboard_is_never_a_card(self):
+        self.assertFalse(seg.is_furniture_label("headboard"))
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        # No bed under it, or only a sofa: dropped, like a pillow on nothing.
+        head = {"label": "headboard", "confidence": 0.5, "box": (0.2, 0.2, 0.6, 0.4), "mask": img(_rect_mask(100, 100, 20, 20, 60, 40))}
+        sofa = {"label": "sofa", "confidence": 0.8, "box": (0.1, 0.1, 0.7, 0.8), "mask": img(_rect_mask(100, 100, 10, 10, 70, 80))}
+        furniture, _ = seg.select_detections([head, sofa], [head["mask"], sofa["mask"]], 100, 100)
+        self.assertEqual([d["label"] for d in furniture], ["sofa"])
+
+    def test_a_headboard_beside_the_bed_is_not_its_head(self):
+        self.assertFalse(seg.is_bed_head((0.0, 0.3, 0.15, 0.6), (0.2, 0.5, 0.8, 0.9)))
+
     def test_a_mirror_inside_the_bed_box_is_its_headboard(self):
         img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
         bed = self.det("bed", 0.8, (0.1, 0.3, 0.8, 0.9))
@@ -199,6 +247,24 @@ class DedupeTests(unittest.TestCase):
         headboard["mask"] = img(_rect_mask(100, 100, 10, 30, 30, 55))
         self.assertEqual(seg.merge_parts_into_hosts([bed, headboard]), [bed])
         self.assertTrue((np.asarray(bed["mask"]) > 127)[35, 15])
+
+    def test_a_mirror_on_the_wall_inside_a_four_poster_box_stays(self):
+        # 24-image answer key: a round mirror on the wall behind a four-poster,
+        # inside the frame's box but nowhere near the headboard.
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.75, (0.19, 0.19, 0.97, 0.92))
+        mirror = self.det("mirror", 0.47, (0.34, 0.40, 0.46, 0.51))
+        bed["mask"] = img(_rect_mask(100, 100, 20, 55, 97, 92))
+        mirror["mask"] = img(_rect_mask(100, 100, 34, 40, 46, 51))
+        self.assertEqual(len(seg.merge_parts_into_hosts([bed, mirror])), 2)
+
+    def test_a_photo_frame_on_the_nightstand_inside_the_bed_box_stays(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        bed = self.det("bed", 0.8, (0.33, 0.47, 0.73, 0.8))
+        frame = self.det("artwork", 0.34, (0.34, 0.51, 0.39, 0.59))
+        bed["mask"] = img(_rect_mask(100, 100, 40, 55, 73, 80))
+        frame["mask"] = img(_rect_mask(100, 100, 34, 51, 39, 59))
+        self.assertEqual(len(seg.merge_parts_into_hosts([bed, frame])), 2)
 
     def test_a_mirror_above_the_bed_stays(self):
         img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
@@ -535,6 +601,75 @@ class SamMaskTests(unittest.TestCase):
         self.assertTrue(table["mask"][50, 50])
         self.assertTrue(sideboard["mask"][50, 50])
 
+    def test_the_desk_front_goes_to_the_desk_not_the_chair_behind_it(self):
+        # room31: the office chair's box covers the desk front, and both masks
+        # hold it. Asked at the front, SAM 2's whole-object answer is the desk.
+        desk = {"label": "desk", "confidence": 0.45, "box": (0.1, 0.5, 0.9, 0.9), "mask": _rect_mask(100, 100, 10, 50, 90, 90)}
+        chair = {"label": "armchair", "confidence": 0.6, "box": (0.1, 0.2, 0.4, 0.9), "mask": _rect_mask(100, 100, 10, 20, 40, 90)}
+        asked = []
+
+        def ask(x, y):
+            asked.append((x, y))
+            return np.stack([_rect_mask(100, 100, 10, 50, 40, 90), _rect_mask(100, 100, 10, 50, 90, 90)])
+
+        seg.resolve_overlaps([desk, chair])
+        seg.split_contested([desk, chair], ask)
+        self.assertEqual(len(asked), 1)
+        self.assertTrue(10 <= asked[0][0] < 40 and 50 <= asked[0][1] < 90)
+        self.assertFalse((desk["mask"] & chair["mask"]).any())
+        self.assertTrue(desk["mask"][70, 25])
+        self.assertTrue(chair["mask"][30, 25])
+
+    def test_a_shared_patch_goes_to_the_piece_sam_answers_with(self):
+        # The front dining chair's back hides part of the one behind it.
+        behind = {"label": "armchair", "confidence": 0.8, "box": (0.2, 0.2, 0.5, 0.8), "mask": _rect_mask(100, 100, 20, 20, 50, 80)}
+        front = {"label": "armchair", "confidence": 0.4, "box": (0.4, 0.3, 0.8, 0.9), "mask": _rect_mask(100, 100, 40, 30, 80, 90)}
+        seg.split_contested([behind, front], lambda x, y: front["mask"][None].copy())
+        self.assertTrue(front["mask"][50, 45])
+        self.assertFalse(behind["mask"][50, 45])
+
+    def test_without_sam_the_more_confident_piece_keeps_the_patch(self):
+        a = {"label": "desk", "confidence": 0.3, "box": (0.1, 0.1, 0.6, 0.6), "mask": _rect_mask(100, 100, 10, 10, 60, 60)}
+        b = {"label": "armchair", "confidence": 0.7, "box": (0.4, 0.4, 0.9, 0.9), "mask": _rect_mask(100, 100, 40, 40, 90, 90)}
+
+        def broken(x, y):
+            raise RuntimeError("no SAM")
+
+        seg.split_contested([a, b], broken)
+        self.assertTrue(b["mask"][50, 50])
+        self.assertFalse(a["mask"][50, 50])
+
+    def test_the_loser_drops_slivers_by_the_patch_but_keeps_its_own_parts(self):
+        # room10: one box on both frames, one on the right frame. The left
+        # box keeps the left frame; the strip left beside the right frame goes,
+        # a separate small piece away from the patch (a chair's seat) stays.
+        both = {"label": "artwork", "confidence": 0.5, "box": (0.0, 0.0, 1.0, 0.6), "mask": _rect_mask(100, 100, 5, 10, 95, 50)}
+        both["mask"][80:84, 5:9] = True
+        right = {"label": "artwork", "confidence": 0.4, "box": (0.55, 0.1, 0.95, 0.5), "mask": _rect_mask(100, 100, 55, 10, 93, 50)}
+        seg.split_contested([both, right], lambda x, y: right["mask"][None].copy())
+        self.assertTrue(both["mask"][30, 20])
+        self.assertFalse(both["mask"][30, 94])
+        self.assertTrue(both["mask"][82, 7])
+        self.assertTrue(right["mask"][30, 70])
+
+    def test_a_chair_left_with_only_its_back_stays_a_card(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        desk = {"label": "desk", "confidence": 0.45, "box": (0.1, 0.5, 0.9, 0.9), "mask": img(_rect_mask(100, 100, 10, 50, 90, 90))}
+        chair = {"label": "armchair", "confidence": 0.6, "box": (0.1, 0.4, 0.4, 0.9), "mask": img(_rect_mask(100, 100, 10, 40, 40, 90))}
+        seg._settle_masks([desk, chair], 100, 100, ask=lambda x, y: _rect_mask(100, 100, 10, 50, 90, 90)[None])
+        self.assertFalse(chair["swallowed"])
+        self.assertEqual(int((np.asarray(chair["mask"]) > 127).sum()), 300)
+
+    def test_settle_masks_leaves_no_pixel_in_two_masks(self):
+        img = lambda m: Image.fromarray(m.astype("uint8") * 255, mode="L")
+        table = {"label": "dining table", "confidence": 0.5, "box": (0.2, 0.4, 0.8, 0.8), "mask": img(_rect_mask(100, 100, 20, 40, 80, 80))}
+        sideboard = {"label": "bookshelf", "confidence": 0.4, "box": (0.3, 0.3, 0.8, 0.6), "mask": img(_rect_mask(100, 100, 30, 30, 80, 60))}
+        rug = {"label": "rug", "confidence": 0.5, "box": (0.0, 0.7, 1.0, 1.0), "mask": img(_rect_mask(100, 100, 0, 70, 100, 100))}
+        dets = [table, sideboard, rug]
+        seg._settle_masks(dets, 100, 100, ask=lambda x, y: sideboard["mask"][None].copy())
+        self.assertLessEqual(int(np.max(sum((np.asarray(d["mask"]) > 127).astype(int) for d in dets))), 1)
+        self.assertTrue(np.asarray(sideboard["mask"])[50, 50] > 127)
+
     def test_settle_masks_grows_the_box_to_cover_the_mask(self):
         mask = Image.fromarray(_rect_mask(100, 100, 18, 20, 80, 95).astype("uint8") * 255, mode="L")
         dets = [{"box": (0.2, 0.2, 0.8, 0.9), "mask": mask}]
@@ -544,3 +679,154 @@ class SamMaskTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReflectionTests(unittest.TestCase):
+    @staticmethod
+    def det(label, box, confidence=0.5):
+        # Mirrors at the confidence real ones scored in the test rooms.
+        if label == "mirror" and confidence == 0.5:
+            confidence = 0.77
+        return {"label": label, "confidence": confidence, "box": box, "mask": None}
+
+    def labels(self, dets):
+        return [d["label"] for d in seg.drop_reflections(dets)]
+
+    def test_the_lamp_in_room09s_floor_mirror_is_dropped(self):
+        # Boxes from compare/all_rooms/room09: the real lamp stands on the desk
+        # (DINO: "floor lamp"), its reflection is inside the leaning mirror.
+        dets = [
+            self.det("mirror", (0.0351, 0.1718, 0.1383, 0.5734)),
+            self.det("desk", (0.0224, 0.6029, 0.2776, 0.8896)),
+            self.det("floor lamp", (0.144, 0.4211, 0.2319, 0.6445)),
+            self.det("table lamp", (0.045, 0.4416, 0.1072, 0.5657)),
+        ]
+        self.assertEqual(self.labels(dets), ["mirror", "desk", "floor lamp"])
+
+    def test_a_reflection_with_no_twin_outside_stays(self):
+        dets = [self.det("mirror", (0.1, 0.1, 0.4, 0.9)), self.det("armchair", (0.15, 0.5, 0.35, 0.88))]
+        self.assertEqual(self.labels(dets), ["mirror", "armchair"])
+
+    def test_what_stands_below_a_wall_mirror_stays(self):
+        # A vase on the console under the mirror reaches below its bottom edge.
+        dets = [
+            self.det("mirror", (0.3, 0.2, 0.6, 0.5)),
+            self.det("vase", (0.4, 0.4, 0.45, 0.56)),
+            self.det("vase", (0.8, 0.5, 0.85, 0.6)),
+        ]
+        self.assertEqual(len(seg.drop_reflections(dets)), 3)
+
+    def test_a_mirror_headboard_does_not_hide_the_bed_pillows(self):
+        dets = [
+            self.det("bed", (0.1, 0.3, 0.8, 0.9)),
+            self.det("mirror", (0.15, 0.3, 0.75, 0.6)),
+            self.det("pillow", (0.2, 0.45, 0.35, 0.58)),
+            self.det("pillow", (0.5, 0.45, 0.65, 0.58)),
+        ]
+        self.assertEqual(len(seg.drop_reflections(dets)), 4)
+
+    def test_bedroom_lamp_beside_weak_mirrors_stays(self):
+        # compare/all_rooms/bedroom: DINO called the dark bedside lamp (0.37)
+        # and the headboard (0.30) "mirror"; the lamp is real.
+        dets = [
+            self.det("bed", (0.071, 0.515, 0.547, 0.875), 0.81),
+            self.det("mirror", (0.05, 0.517, 0.115, 0.725), 0.37),
+            self.det("mirror", (0.053, 0.514, 0.206, 0.722), 0.3),
+            self.det("table lamp", (0.093, 0.522, 0.117, 0.716), 0.37),
+            self.det("floor lamp", (0.914, 0.416, 0.961, 0.79), 0.64),
+        ]
+        self.assertIn("table lamp", self.labels(dets))
+
+    def test_a_confident_mirror_at_the_bed_head_is_the_headboard(self):
+        dets = [
+            self.det("bed", (0.2, 0.5, 0.8, 0.9)),
+            self.det("mirror", (0.22, 0.3, 0.78, 0.6)),
+            self.det("table lamp", (0.3, 0.4, 0.36, 0.55)),
+            self.det("table lamp", (0.85, 0.4, 0.9, 0.55)),
+        ]
+        self.assertEqual(len(seg.drop_reflections(dets)), 4)
+
+    def test_select_detections_drops_reflections(self):
+        raw = [
+            {"label": "mirror", "confidence": 0.77, "box": [0.0351, 0.1718, 0.1383, 0.5734]},
+            {"label": "floor lamp", "confidence": 0.45, "box": [0.144, 0.4211, 0.2319, 0.6445]},
+            {"label": "table lamp", "confidence": 0.39, "box": [0.045, 0.4416, 0.1072, 0.5657]},
+        ]
+        furniture, _ = seg.select_detections(raw, [None] * 3, 100, 100)
+        self.assertEqual(sorted(d["label"] for d in furniture), ["floor lamp", "mirror"])
+
+
+def img(mask):
+    return Image.fromarray(mask.astype("uint8") * 255, mode="L")
+
+
+class AnswerKeyFixTests(unittest.TestCase):
+    """Rules added after scoring against the 24-image Roboflow answer key."""
+
+    @staticmethod
+    def det(label, box, conf=0.5, mask=None):
+        return {"label": label, "confidence": conf, "box": box, "mask": mask}
+
+    def test_curtains_and_artwork_in_a_doorway_box_stay(self):
+        # DINO boxes a curtained window or a gallery wall as "doorway".
+        raw = [
+            {"label": "doorway", "confidence": 0.4, "box": [0.0, 0.22, 0.25, 0.74]},
+            {"label": "artwork", "confidence": 0.45, "box": [0.04, 0.36, 0.16, 0.48]},
+            {"label": "curtain", "confidence": 0.4, "box": [0.02, 0.25, 0.08, 0.73]},
+            {"label": "armchair", "confidence": 0.4, "box": [0.10, 0.57, 0.20, 0.70]},
+        ]
+        furniture, _ = seg.select_detections(raw, [None] * 4, 100, 100)
+        self.assertEqual(sorted(d["label"] for d in furniture), ["artwork", "curtain"])
+
+    def test_a_vase_keeps_the_container_not_the_flowers(self):
+        vessel = img(_rect_mask(100, 100, 45, 60, 55, 80))
+        with_flowers = img(_rect_mask(100, 100, 35, 30, 65, 80))
+        kept = seg.dedupe_detections([
+            self.det("vase", (0.35, 0.30, 0.65, 0.80), 0.66, with_flowers),
+            self.det("vase", (0.45, 0.60, 0.55, 0.80), 0.50, vessel),
+        ])
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["box"], (0.45, 0.60, 0.55, 0.80))
+        self.assertEqual(int((np.asarray(kept[0]["mask"]) > 127).sum()), 200)
+
+    def test_a_box_over_a_gallery_wall_is_dropped_for_its_frames(self):
+        group = self.det("artwork", (0.1, 0.1, 0.9, 0.5), 0.45, img(_rect_mask(100, 100, 10, 10, 90, 50)))
+        a = self.det("artwork", (0.12, 0.12, 0.4, 0.45), 0.4, img(_rect_mask(100, 100, 12, 12, 40, 45)))
+        b = self.det("artwork", (0.5, 0.12, 0.85, 0.45), 0.4, img(_rect_mask(100, 100, 50, 12, 85, 45)))
+        kept = seg.dedupe_detections([group, a, b])
+        self.assertEqual(sorted(d["box"] for d in kept), [a["box"], b["box"]])
+
+    def test_a_bookshelf_is_not_a_group_of_its_cabinets(self):
+        shelf = self.det("bookshelf", (0.1, 0.1, 0.9, 0.9), 0.5, img(_rect_mask(100, 100, 10, 10, 90, 90)))
+        c1 = self.det("cabinet", (0.12, 0.6, 0.4, 0.88), 0.4, img(_rect_mask(100, 100, 12, 60, 40, 88)))
+        c2 = self.det("cabinet", (0.5, 0.6, 0.85, 0.88), 0.4, img(_rect_mask(100, 100, 50, 60, 85, 88)))
+        kept = seg.dedupe_detections([shelf, c1, c2])
+        self.assertEqual([d["label"] for d in kept], ["bookshelf"])
+
+    def test_low_storage_under_a_wall_tv_is_a_tv_stand(self):
+        bench = self.det("bookshelf", (0.09, 0.55, 0.31, 0.66))
+        seg.relabel_by_position([bench], [(0.11, 0.33, 0.28, 0.49)], 4 / 3)
+        self.assertEqual((bench["label"], bench["dino_label"]), ("tv stand", "bookshelf"))
+
+    def test_a_desk_with_a_monitor_on_it_stays(self):
+        desk = self.det("console table", (0.02, 0.59, 0.32, 0.94))
+        seg.relabel_by_position([desk], [(0.12, 0.45, 0.23, 0.63)], 16 / 9)
+        self.assertEqual(desk["label"], "console table")
+
+    def test_a_table_in_front_of_the_sofa_is_the_coffee_table(self):
+        sofa = self.det("sofa", (0.31, 0.53, 0.71, 0.71))
+        table = self.det("console table", (0.37, 0.65, 0.64, 0.78))
+        seg.relabel_by_position([sofa, table], [], 4 / 3)
+        self.assertEqual(table["label"], "coffee table")
+
+    def test_a_side_table_beside_an_armchair_called_sofa_stays(self):
+        chair = self.det("sofa", (0.80, 0.55, 0.95, 0.85))
+        table = self.det("side table", (0.87, 0.71, 0.99, 0.96))
+        seg.relabel_by_position([chair, table], [], 16 / 9)
+        self.assertEqual(table["label"], "side table")
+
+    def test_a_stool_in_front_of_the_sofa_is_an_ottoman(self):
+        sofa = self.det("sofa", (0.2, 0.4, 0.8, 0.65))
+        pouf = self.det("stool", (0.3, 0.6, 0.45, 0.85))
+        seg.relabel_by_position([sofa, pouf], [], 4 / 3)
+        self.assertEqual(pouf["label"], "ottoman")

@@ -15,12 +15,19 @@ and saves two images per room to ./compare/:
 Needs the same setup as the local pipeline (see segmentation.py).
 """
 
+import asyncio
 import os
 import sys
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+from dotenv import load_dotenv
+
+# Like main.py, so the GEMINI_API_KEY naming step runs as in the app.
+for _env_name in (".env", "backend.env"):
+    load_dotenv(Path(__file__).with_name(_env_name))
 
 import segmentation as seg
 
@@ -144,8 +151,8 @@ def compare(path: Path) -> None:
 
     before = _before(img, boxes)
     all_dets = dets + mask_only
-    seg._settle_masks(all_dets, W, H)
-    seg.relabel_with_clip(img, [d for d in dets if not d.get("swallowed")])
+    seg._settle_masks_with_sam2(img, all_dets)
+    asyncio.run(seg.name_pieces(img, [d for d in dets if not d.get("swallowed")]))
     after = [d["mask"] for d in dets]
     labels = [
         (f"{d['dino_label']} -> {d['label']}" if d.get("dino_label") else d["label"])

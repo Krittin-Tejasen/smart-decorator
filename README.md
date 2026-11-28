@@ -109,7 +109,7 @@ Generated image → Grounding DINO → 2D bounding boxes → SAM 2 → one mask 
 ```
 
 - **Grounding DINO** — open-vocabulary text-prompted detection (`transformers`'
-  `AutoModelForZeroShotObjectDetection`, model `IDEA-Research/grounding-dino-tiny` by
+  `AutoModelForZeroShotObjectDetection`, model `IDEA-Research/grounding-dino-base` by
   default), produces a labelled box per item. Weights auto-download from the Hugging
   Face Hub on first use.
 - **SAM 2** — takes those boxes as prompts (`sam2`'s `SAM2ImagePredictor`) and returns

@@ -60,17 +60,20 @@ Setup (one-time, per machine that runs this backend)
       curl -L -o checkpoints/sam2.1_hiera_small.pt \
         https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt
 
-  Grounding DINO's weights (IDEA-Research/grounding-dino-tiny, ~660MB) are
+  Grounding DINO's weights (IDEA-Research/grounding-dino-base, ~1GB) are
   downloaded automatically from the Hugging Face Hub on first use — no
   manual step needed for that half of the pipeline.
 
 Env vars
 ────────
-  GROUNDING_DINO_MODEL      Hugging Face model id (default: IDEA-Research/grounding-dino-tiny)
+  GROUNDING_DINO_MODEL      Hugging Face model id (default: IDEA-Research/grounding-dino-base;
+                            on the 24-image answer key it found 40/52 curtains where tiny
+                            found 23, at detection F1 0.843 vs 0.800)
   SAM2_CHECKPOINT           Path to a local SAM 2.1 checkpoint (default: checkpoints/sam2.1_hiera_small.pt)
   SAM2_MODEL_CFG            Matching hydra config name (default: configs/sam2.1/sam2.1_hiera_s.yaml)
   SEGMENTATION_DEVICE       Force "cuda" or "cpu" (default: auto-detect via torch.cuda.is_available())
-  SAM_BOX_THRESHOLD         Confidence threshold for detection boxes (default: 0.30)
+  SAM_BOX_THRESHOLD         Confidence threshold for detection boxes (default: 0.25, tuned for
+                            grounding-dino-base: 0.30 lost recall, 0.20 let in too much junk)
   SAM_TEXT_THRESHOLD        Text-matching threshold for Grounding DINO (default: 0.25)
   SAM_BOX_PAD               Grow each DINO box by this share of its size before SAM 2 (default: 0,
                             DINO's own box; padding mostly pulled in wall and floor)
@@ -79,6 +82,10 @@ Env vars
                             tended to add pillows, plants behind a lamp, and floor)
   SAM_MASK_SCORE_MARGIN     With SAM_MULTIMASK=1: how far below the best candidate's score a
                             larger mask may be and still be picked (default: 0.15)
+  SEGMENTATION_LABELER      Who names each piece after SAM 2: "gemini" (default: one batched
+                            Gemini call per room, label_verification.py; CLIP for pieces it
+                            doesn't answer), "clip" (offline rule only) or "none" (DINO's word)
+  GEMINI_LABEL_MODEL        Gemini model for that (default: GEMINI_VISION_MODEL)
   SEGMENTATION_CLIP_RELABEL 0 = skip the CLIP second opinion on labels (default: 1; also
                             skipped when sentence-transformers isn't installed)
   CLIP_MODEL                sentence-transformers CLIP model for that (default: clip-ViT-B-32)
@@ -93,6 +100,7 @@ import contextlib
 import inspect
 import json
 import os
+import re
 import threading
 import uuid
 from collections import Counter
@@ -123,13 +131,15 @@ router = APIRouter(tags=["segmentation"])
 # Grounding DINO requires lowercase phrases separated by " . " and a
 # trailing period.
 _FURNITURE_PROMPT = (
-    "sofa . couch . armchair . chair . dining chair . office chair . stool . bench . ottoman . "
+    "sofa . couch . armchair . chair . dining chair . office chair . bench . ottoman . stool . "
     "coffee table . dining table . side table . console table . desk . "
-    "bed . headboard . nightstand . dresser . wardrobe . bookshelf . bookcase . "
+    "bed . headboard . nightstand . dresser . wardrobe . bookshelf . tv_bench . "
+    # Not "tv stand": DINO put it on nightstands, desks and consoles (47 cards
+    # in 56 test rooms, 2 before), and matching sends it to TV benches.
     "cabinet . "
     "floor lamp . table lamp . pendant lamp . chandelier . "
     "rug . carpet . curtain . blinds . "
-    "plant pot . artwork . painting . mirror . vase . decoration . "
+    "plant pot . artwork . mirror . vase . decoration . "
     # Soft furnishings: folded into the sofa, bed or chair they lie on, never a
     # card. Named so DINO doesn't call them a stool or a sofa of their own.
     "pillow . cushion . throw pillow . "
@@ -141,7 +151,13 @@ _FURNITURE_PROMPT = (
     # generator must preserve, not products to shop for.
     # "doorway" is the opening itself: what stands in it, no lower than its
     # sill, is outside the room (the garden chair seen through an open door).
-    "doorway . door . window ."
+    "doorway . door . window . "
+    # Appliance decoys, same idea: named so a wall-mounted TV isn't forced onto
+    # "artwork"/"mirror" or a fridge onto "wardrobe", then dropped below.
+    # Appliances are never shoppable cards, in the original photo or the
+    # generated one.
+    "tv . television . computer . refrigerator . microwave . oven . washing machine . "
+    "air conditioner ."
 )
 
 _VOCAB: tuple[str, ...] = tuple(p.strip() for p in _FURNITURE_PROMPT.split(".") if p.strip())
@@ -151,13 +167,26 @@ _MAX_PHRASE_WORDS = max(len(p.split()) for p in _VOCAB)
 # Architecture / fixtures that must never show up as a shoppable card — whether
 # they came from the DINO decoys above or from Gemini's "every item" answer.
 _NON_FURNITURE_LABELS = frozenset({"doorway", "door", "window", "ceiling light", "air vent", "vent"})
+# Appliances and electronics, matched anywhere in a label so Gemini's free
+# text ("flat screen tv", "stainless steel fridge") is caught too. Never a card.
+_APPLIANCE_RE = re.compile(
+    r"\b(tvs?|television|flat ?screen|tv screen|monitor|computer|laptop|printer|projector|"
+    r"refrigerator|fridge|freezer|microwave|oven|stove|cooktop|hob|range hood|cooker|dishwasher|"
+    r"washing machine|washer|dryer|air conditioner|air conditioning|ac unit|air purifier|"
+    r"humidifier|dehumidifier|heater|radiator|fan|ceiling fan|speakers?|soundbar|subwoofer|"
+    r"stereo|game console|kettle|toaster|coffee (machine|maker)|blender|vacuum|appliances?)\b"
+)
+# TV furniture is furniture, not an appliance.
+_TV_FURNITURE_RE = re.compile(r"\btv (stand|bench|unit|cabinet|console|table)\b|\bmedia (console|unit|cabinet)\b")
 # Openings something outside the room can be seen through.
 _OPENING_LABELS = frozenset({"doorway", "door"})
 
 # Never a card of their own: they join the mask of the sofa, bed or chair they
 # lie on (merge_parts_into_hosts), or are dropped.
 _MASK_ONLY_LABELS = frozenset({"pillow", "cushion", "throw pillow"})
-_PART_ONLY_LABELS = frozenset({"blanket"})
+_PART_ONLY_LABELS = frozenset({"blanket", "headboard"})
+# Parts only a bed takes (a sofa or chair has no headboard).
+_BED_PART_LABELS = frozenset({"headboard"})
 # What pillows are cut out of. Not chairs: DINO calls a seat "cushion" too.
 _PILLOW_HOSTS = frozenset({"sofa", "couch", "bed"})
 
@@ -245,6 +274,10 @@ class FurnitureItem(BaseModel):
     mask_image: str             # data:image/png;base64,… (full-size binary mask, L mode)
     mask_precise: bool          # True = real SAM 2 mask, False = bbox rectangle approximation
     features: FurnitureFeatures
+    # Who named the piece: "gemini" (label_verification), "clip" (offline
+    # fallback) or "dino" (unchanged). dino_label is DINO's word when changed.
+    label_source: str = "dino"
+    dino_label: str | None = None
 
 
 class SegmentationResult(BaseModel):
@@ -464,8 +497,13 @@ def canonicalize_label(raw: str) -> str:
     return " ".join(words) or "furniture"
 
 
+def is_appliance_label(label: str) -> bool:
+    label = label.strip().lower()
+    return bool(_APPLIANCE_RE.search(label)) and not _TV_FURNITURE_RE.search(label)
+
+
 def is_furniture_label(label: str) -> bool:
-    return label.strip().lower() not in _NON_FURNITURE_LABELS | _MASK_ONLY_LABELS | _PART_ONLY_LABELS
+    return is_candidate_label(label) and label.strip().lower() not in _MASK_ONLY_LABELS | _PART_ONLY_LABELS
 
 
 def is_mask_only_label(label: str) -> bool:
@@ -473,8 +511,9 @@ def is_mask_only_label(label: str) -> bool:
 
 
 def is_candidate_label(label: str) -> bool:
-    """Worth a SAM 2 mask: furniture, or something cut out of / folded into it."""
-    return label.strip().lower() not in _NON_FURNITURE_LABELS
+    """Worth a SAM 2 mask: furniture, or something cut out of / folded into it.
+    Not architecture, not appliances."""
+    return label.strip().lower() not in _NON_FURNITURE_LABELS and not is_appliance_label(label)
 
 
 def _box_iou_and_containment(a: tuple, b: tuple) -> tuple[float, float]:
@@ -498,6 +537,40 @@ def _mask_iou_and_containment(a, b) -> tuple[float, float]:
     return (inter / union if union else 0.0), (inter / smaller if smaller else 0.0)
 
 
+# A box holding this much of each of two or more separate pieces of its own
+# kind is a box on the group (a gallery wall, a pair of curtains, two vases on
+# a console), not a piece: as a card it hid the real ones.
+_GROUP_MEMBER_CONTAINMENT = 0.8
+_GROUP_MEMBERS_MAX_IOU = 0.3
+# Only kinds that hang or stand in sets. Not storage (a bookshelf holding the
+# cabinets DINO boxed inside it) and not lights (a floor lamp's two shades).
+_GROUP_FAMILIES = frozenset({"wall_decor", "window_covering", "vessel"})
+
+
+def drop_group_boxes(dets: list[dict], masks: dict) -> list[dict]:
+    family = lambda d: _LABEL_FAMILY.get(d["label"], d["label"])
+    groups = set()
+    for g in dets:
+        mg = masks[id(g)]
+        if mg is None or family(g) not in _GROUP_FAMILIES:
+            continue
+        members = []
+        for d in dets:
+            md = masks[id(d)]
+            if d is g or md is None or family(d) != family(g) or md.sum() >= 0.7 * mg.sum():
+                continue
+            if (md & mg).sum() / max(md.sum(), 1) >= _GROUP_MEMBER_CONTAINMENT:
+                members.append(md)
+        separate = any(
+            _mask_iou_and_containment(a, b)[0] < _GROUP_MEMBERS_MAX_IOU
+            and (a & b).sum() < 0.5 * min(a.sum(), b.sum())
+            for i, a in enumerate(members) for b in members[i + 1:]
+        )
+        if separate:
+            groups.add(id(g))
+    return [d for d in dets if id(d) not in groups]
+
+
 def dedupe_detections(dets: list[dict]) -> list[dict]:
     """Greedy NMS over detections shaped {"label", "confidence", "box": (x1,y1,x2,y2)},
     optionally with a SAM 2 "mask".
@@ -518,6 +591,7 @@ def dedupe_detections(dets: list[dict]) -> list[dict]:
         return None if mask is None else np.asarray(mask.convert("L")) > 127
 
     masks = {id(d): as_bool(d.get("mask")) for d in dets}
+    dets = drop_group_boxes(dets, masks)
     kept: list[dict] = []
     for det in sorted(dets, key=lambda d: d["confidence"], reverse=True):
         family = _LABEL_FAMILY.get(det["label"], det["label"])
@@ -536,7 +610,14 @@ def dedupe_detections(dets: list[dict]) -> list[dict]:
             kept.append(det)
         else:
             m_det, m_other = masks[id(det)], masks[id(kept[duplicate])]
-            if m_det is not None and m_other is not None and m_det.sum() > m_other.sum():
+            if family == "vessel":
+                # A vase gets one box on the vessel and one on the vessel with
+                # its flowers or plant; the card is the container only, so the
+                # smaller mask (and its box) wins.
+                if m_det is not None and m_other is not None and m_det.sum() < m_other.sum():
+                    kept[duplicate] = {**kept[duplicate], "box": det["box"], "mask": det["mask"]}
+                    masks[id(kept[duplicate])] = m_det
+            elif m_det is not None and m_other is not None and m_det.sum() > m_other.sum():
                 # The more complete view, under the more confident name.
                 # Keep the union box: a bed deduped against its headboard must
                 # keep the bed's box, or the duvet no longer sits inside it.
@@ -610,9 +691,14 @@ _MAX_MASK_LEAK = 0.2
 # behind whatever stands on them.
 _FLOOR_LABELS = {"rug", "carpet"}
 # A box must be smaller than this share of another's area to count as sitting
-# in front of it (lamp on a nightstand). Two similar-sized boxes are left alone:
-# "smaller is in front" handed a dining table's pixels to the sideboard box.
+# in front of it (lamp on a nightstand). Two similar-sized boxes are left to
+# split_contested: "smaller is in front" handed a dining table's pixels to the
+# sideboard box.
 _MAX_FRONT_AREA_RATIO = 0.4
+# What two similar-sized pieces still share after resolve_overlaps (the office
+# chair behind a desk, its box over the desk's front) is asked of SAM 2 again,
+# per connected patch. Patches smaller than this follow the pair's largest one.
+_MIN_CONTESTED_PX = 50
 
 
 def pad_box(box: list[float], W: int, H: int, pad: float) -> list[float]:
@@ -697,7 +783,8 @@ def resolve_overlaps(dets: list[dict]) -> None:
     behind: it gives shared pixels to anything and takes none. Otherwise a box
     well under the other's size is in front (the lamp on the nightstand, the
     vase at the foot of a floor lamp) and the larger one
-    gives those pixels up. Similar-sized boxes keep their own masks.
+    gives those pixels up. Similar-sized boxes keep their own masks here;
+    split_contested settles them.
     """
     for a in dets:
         for b in dets:
@@ -717,6 +804,89 @@ def resolve_overlaps(dets: list[dict]) -> None:
                 if area_b >= area_a * _MAX_FRONT_AREA_RATIO:
                     continue  # not clearly in front
             a["mask"] = a["mask"] & ~b["mask"]
+
+
+def pick_owner(candidates, mask_a, mask_b) -> int:
+    """0 if SAM 2's whole-object answer for a shared patch (the largest of its
+    candidates) matches mask_a at least as well (IoU) as mask_b, else 1.
+    Asked at the desk's front, the whole object is the desk, not the chair
+    behind it. The best match over all candidates was fooled by part answers:
+    the flowers alone matched a "chandelier" box on them better than the vase
+    with its flowers."""
+    import numpy as np
+
+    whole = max(candidates, key=lambda c: int(np.count_nonzero(c)))
+
+    def iou(mask) -> float:
+        return float(np.logical_and(whole, mask).sum()) / max(int(np.logical_or(whole, mask).sum()), 1)
+
+    return 0 if iou(mask_a) >= iou(mask_b) else 1
+
+
+def split_contested(dets: list[dict], ask=None) -> None:
+    """Leave no pixel in two masks, in place. Run after resolve_overlaps.
+
+    Each connected patch two masks still share goes to one of them: `ask(x, y)`
+    returns SAM 2's candidate masks for a point at the patch's most interior
+    pixel, and pick_owner says whose mask they match. Patches under
+    _MIN_CONTESTED_PX follow the pair's largest patch. Without `ask`, or when
+    it fails, the higher-confidence piece keeps the patch. Pillows and throws
+    are left in their host (they are part of it, never a card). A piece that
+    lost a patch also drops the slivers left around it (the edge of the frame
+    next door), by clean_mask's stray-blob rule, so its cut-out isn't stretched.
+    """
+    import cv2
+    import numpy as np
+
+    losers: list[list] = []  # [piece, pixels it lost]
+    for i, a in enumerate(dets):
+        for b in dets[i + 1:]:
+            if a["mask"] is None or b["mask"] is None:
+                continue
+            if {a.get("label"), b.get("label")} & (_MASK_ONLY_LABELS | _PART_ONLY_LABELS):
+                continue
+            shared = a["mask"] & b["mask"]
+            if not shared.any():
+                continue
+            mask_a, mask_b = a["mask"], b["mask"]
+            n, labels, stats, _ = cv2.connectedComponentsWithStats(shared.astype("uint8"), connectivity=8)
+            patches = sorted(range(1, n), key=lambda k: -stats[k, cv2.CC_STAT_AREA])
+            owner_by_default = 0 if a.get("confidence", 0) >= b.get("confidence", 0) else 1
+            for k in patches:
+                patch = labels == k
+                owner = owner_by_default
+                if ask is not None and (k == patches[0] or stats[k, cv2.CC_STAT_AREA] >= _MIN_CONTESTED_PX):
+                    try:
+                        depth = cv2.distanceTransform(patch.astype("uint8"), cv2.DIST_L2, 5)
+                        y, x = np.unravel_index(int(depth.argmax()), depth.shape)
+                        owner = pick_owner(ask(int(x), int(y)), mask_a, mask_b)
+                    except Exception as exc:
+                        print(f"[segmentation] SAM 2 point prompt failed: {exc}")
+                    if k == patches[0]:
+                        owner_by_default = owner
+                loser = b if owner == 0 else a
+                loser["mask"] = loser["mask"] & ~patch
+                for entry in losers:
+                    if entry[0] is loser:
+                        entry[1] = entry[1] | patch
+                        break
+                else:
+                    losers.append([loser, patch])
+
+    # Only blobs next to what was taken: a chair's seat that SAM 2 already
+    # painted apart from its back stays.
+    for d, taken in losers:
+        if not d["mask"].any():
+            continue
+        near = cv2.dilate(taken.astype("uint8"), np.ones((5, 5), np.uint8)) > 0
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(d["mask"].astype("uint8"), connectivity=8)
+        biggest = stats[1:, cv2.CC_STAT_AREA].max()
+        drop = [
+            k for k in range(1, n)
+            if stats[k, cv2.CC_STAT_AREA] < _MIN_COMPONENT_SHARE * biggest and near[labels == k].any()
+        ]
+        if drop:
+            d["mask"] = d["mask"] & ~np.isin(labels, drop)
 
 
 def mask_bbox(mask, W: int, H: int) -> tuple[float, float, float, float] | None:
@@ -779,7 +949,7 @@ def _get_grounding_dino() -> tuple[Any, Any, str]:
             except ImportError as exc:
                 raise HTTPException(500, _LOCAL_DEPS_HINT) from exc
 
-            model_id = os.getenv("GROUNDING_DINO_MODEL", "IDEA-Research/grounding-dino-tiny")
+            model_id = os.getenv("GROUNDING_DINO_MODEL", "IDEA-Research/grounding-dino-base")
             device = _get_device()
             processor = AutoProcessor.from_pretrained(model_id)
             model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
@@ -828,13 +998,44 @@ _OPENING_PROMPT = "doorway . open door ."
 # the sill check) catch what a lower bar lets in.
 _OPENING_BOX_THRESHOLD = 0.25
 
+# No separate curtain pass: a "curtain . blinds ." prompt has no "window"
+# decoy, so it boxed bare windows as curtains (23 wrong cards on the 24-image
+# answer key, F1 unchanged). grounding-dino-base finds the curtains from the
+# main prompt instead. See docs/curtain-dino-handoff.md.
+
+# A third pass for what hangs on or stands against the wall. grounding-dino-base
+# spreads its scores over the ~50 phrases of the main prompt, and artwork falls
+# under the bar there (24-image answer key: 19/27 artworks scored >= 0.25 in
+# the main prompt, 26/27 in this one); this pass took artwork back from 15 to
+# 19/27 at 3 wrong cards. Keep "table lamp"-like look-alikes in mind before
+# shortening it: "artwork . mirror . vase ." alone called 20 lamp bases vases.
+_WALL_PROMPT = "artwork . painting . picture frame . mirror . vase ."
+_WALL_BOX_THRESHOLD = 0.30
+_WALL_ARTWORK_WORDS = frozenset({"painting", "picture", "frame"})
+
+
+def wall_pass_label(label: str) -> str | None:
+    """The main-vocabulary name for a wall-pass box: "painting" / "picture
+    frame" are artwork. None for a box DINO gave no text ("furniture")."""
+    if label in _VOCAB_SET:
+        return label
+    if _WALL_ARTWORK_WORDS & set(label.split()):
+        return "artwork"
+    return None
+
 
 def _detect_with_grounding_dino_local(img: Image.Image) -> list[dict]:
     openings = [
         {**d, "label": "doorway"}
         for d in _run_grounding_dino(img, _OPENING_PROMPT, _OPENING_BOX_THRESHOLD)
     ]
-    return _run_grounding_dino(img, _FURNITURE_PROMPT) + openings
+    wall = [
+        {**d, "label": label}
+        for d in _run_grounding_dino(img, _WALL_PROMPT, _WALL_BOX_THRESHOLD)
+        if (label := wall_pass_label(d["label"])) is not None
+    ]
+    # Same piece from two passes: dedupe_detections merges it (same family).
+    return _run_grounding_dino(img, _FURNITURE_PROMPT) + openings + wall
 
 
 def _run_grounding_dino(img: Image.Image, prompt: str, box_threshold: float | None = None) -> list[dict]:
@@ -842,7 +1043,7 @@ def _run_grounding_dino(img: Image.Image, prompt: str, box_threshold: float | No
 
     processor, model, device = _get_grounding_dino()
     if box_threshold is None:
-        box_threshold = float(os.getenv("SAM_BOX_THRESHOLD", "0.30"))
+        box_threshold = float(os.getenv("SAM_BOX_THRESHOLD", "0.25"))
     text_threshold = float(os.getenv("SAM_TEXT_THRESHOLD", "0.25"))
 
     # The predictor/model objects are shared singletons — one inference at a
@@ -900,6 +1101,12 @@ def union_of_candidates(predictor: Any, box: list[float]):
     return np.logical_or.reduce(masks > 0)
 
 
+def _autocast(device: str):
+    import torch
+
+    return torch.autocast("cuda", dtype=torch.bfloat16) if device == "cuda" else contextlib.nullcontext()
+
+
 def _segment_boxes_with_sam2_local(
     img: Image.Image, boxes_px: list[list[float]], labels: list[str] | None = None
 ) -> list[Image.Image | None]:
@@ -916,14 +1123,8 @@ def _segment_boxes_with_sam2_local(
     multimask = os.getenv("SAM_MULTIMASK", "0") != "0"
     margin = float(os.getenv("SAM_MASK_SCORE_MARGIN", "0.15"))
 
-    autocast_ctx = (
-        torch.autocast("cuda", dtype=torch.bfloat16)
-        if device == "cuda"
-        else contextlib.nullcontext()
-    )
-
     masks_out: list[Image.Image | None] = []
-    with _inference_lock, torch.inference_mode(), autocast_ctx:
+    with _inference_lock, torch.inference_mode(), _autocast(device):
         predictor.set_image(image_np)
         for box, label in zip(boxes_px, labels or [""] * len(boxes_px)):
             try:
@@ -961,6 +1162,8 @@ async def _detect_with_gemini(image_bytes: bytes, mime_type: str) -> list[dict]:
     prompt = (
         "Analyze this interior design image. Identify every distinct furniture or decor item.\n"
         "Do not include doors, windows or ceiling fixtures.\n"
+        "Do not include TVs, screens, electronics or any appliances (fridge, oven, "
+        "washing machine, air conditioner, fan, speakers…). A TV stand is furniture.\n"
         "Return ONLY a JSON array — no markdown, no extra text. Each element:\n"
         '  "label": string  (e.g. "sofa", "coffee table", "floor lamp")\n'
         '  "box_2d": [ymin, xmin, ymax, xmax]  (integers on a 0-1000 grid relative to the '
@@ -1041,10 +1244,16 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
     """
     detections: list[dict] = []
     openings: list[tuple] = []
+    tvs: list[tuple] = []
     for det, mask_img in zip(raw, mask_imgs):
         box = det.get("box", [])
         if len(box) != 4:
             continue
+        if det["label"] in _TV_LABELS and float(det.get("confidence", 0.0)) >= _TV_MIN_CONFIDENCE:
+            x1, y1, x2, y2 = (float(v) for v in box)
+            if x2 > 1.5 or y2 > 1.5:
+                x1, y1, x2, y2 = x1 / W, y1 / H, x2 / W, y2 / H
+            tvs.append((x1, y1, x2, y2))
         is_opening = det["label"] in _OPENING_LABELS
         if not (is_opening or is_candidate_label(det["label"])):
             continue
@@ -1076,14 +1285,77 @@ def select_detections(raw: list[dict], mask_imgs: list, W: int, H: int) -> tuple
         )
 
     openings = real_openings(openings, [d["box"] for d in detections])
-    detections = [d for d in detections if not seen_through_opening(d["box"], openings)]
-    soft = [d for d in detections if d["label"] in _SOFT_FURNISHING_LABELS]
+    detections = [
+        d for d in detections
+        if d["label"] not in _OUTDOOR_LABELS or not seen_through_opening(d["box"], openings)
+    ]
+    detections = drop_reflections(detections)
+    soft =[d for d in detections if d["label"] in _SOFT_FURNISHING_LABELS]
     furniture = dedupe_detections([d for d in detections if d["label"] not in _SOFT_FURNISHING_LABELS])
     furniture = merge_parts_into_hosts(furniture + soft)
     # A pillow or throw that lies on nothing found is dropped, never a card.
     furniture = [d for d in furniture if d["label"] not in _SOFT_FURNISHING_LABELS]
     relabel_bedside_tables(furniture)
+    relabel_by_position(furniture, tvs, W / H)
     return furniture, []
+
+
+# A mirror shows a second copy of the room, and DINO finds furniture in it (the
+# table lamp reflected in a floor mirror). A piece is a reflection when its box
+# lies this far inside a mirror's box, it reaches no lower than the mirror's
+# bottom edge (+ this share of the image height; what stands in front of a
+# wall mirror, like a vase on the console under it, reaches below), and the
+# same kind of piece is also found outside the mirror: the real one. A piece
+# with no twin outside stays, so nothing real in front of a floor mirror goes
+# missing just for standing there.
+_REFLECTION_CONTAINMENT = 0.8
+_REFLECTION_BOTTOM_MARGIN = 0.01
+# Real mirrors in the test rooms scored 0.54-0.82; weak "mirrors" were other
+# things (a laptop screen 0.32, a dark bedside lamp 0.37, a headboard 0.30),
+# and a real lamp beside the bed went missing behind them.
+_REFLECTION_MIN_MIRROR_CONFIDENCE = 0.5
+
+
+def drop_reflections(dets: list[dict]) -> list[dict]:
+    area = lambda b: (b[2] - b[0]) * (b[3] - b[1])
+    beds = [d["box"] for d in dets if d["label"] == "bed"]
+    # A "mirror" at a bed's head is its headboard (merge_parts_into_hosts),
+    # and the pillows and lamps in front of it are real.
+    mirrors = [
+        d["box"] for d in dets
+        if d["label"] == "mirror"
+        and float(d.get("confidence", 1.0)) >= _REFLECTION_MIN_MIRROR_CONFIDENCE
+        and not any(is_bed_head(d["box"], b) for b in beds)
+    ]
+    if not mirrors:
+        return dets
+
+    def mirror_holding(box: tuple) -> tuple | None:
+        for m in mirrors:
+            if box is m or area(box) >= area(m):
+                continue
+            if (
+                _box_iou_and_containment(box, m)[1] >= _REFLECTION_CONTAINMENT
+                and box[3] <= m[3] + _REFLECTION_BOTTOM_MARGIN
+            ):
+                return m
+        return None
+
+    family = lambda d: _LABEL_FAMILY.get(d["label"], d["label"])
+    inside = {id(d): mirror_holding(d["box"]) for d in dets}
+    kept = []
+    for d in dets:
+        m = inside[id(d)]
+        if m is None or d["label"] in _SOFT_FURNISHING_LABELS or d["label"] == "mirror":
+            kept.append(d)
+            continue
+        twin_outside = any(
+            o is not d and family(o) == family(d) and inside[id(o)] is not m
+            for o in dets
+        )
+        if not twin_outside:
+            kept.append(d)
+    return kept
 
 
 # DINO calls a nightstand "console table", "desk", "side table" or "stool" in
@@ -1112,11 +1384,101 @@ def relabel_bedside_tables(dets: list[dict]) -> None:
                 break
 
 
+# DINO never says "TV bench", "coffee table" or "ottoman" for them (24-image
+# answer key: 6/6 TV benches were a bookshelf, dresser, sideboard or console
+# table; 5/7 coffee tables a desk or console table; the poufs before a sofa
+# "stool"). Where a piece stands says what it is:
+#   - low storage under a wall-mounted TV is a TV bench. The TV's bottom edge
+#     must be above the piece's top: a monitor stands *on* its desk (three
+#     desks with monitors in the 56 rooms), a wall TV hangs over its bench;
+#   - a table standing in front of a sofa, lower than the sofa, is the coffee
+#     table;
+#   - a "stool" in front of a sofa or bed is an ottoman (a pouf); a bar stool
+#     stands at a counter or desk.
+# Only the TV itself is trusted from DINO's decoys, and only when it is sure.
+_TV_LABELS = frozenset({"tv", "television"})
+_TV_MIN_CONFIDENCE = 0.5
+_TV_GAP_MAX = 0.15                # TV bottom to the piece's top, share of image height
+_TV_GAP_MIN = -0.02
+_TV_BENCH_LABELS = frozenset({"console table", "cabinet", "sideboard", "dresser", "bookshelf"})
+_COFFEE_TABLE_LABELS = frozenset({"desk", "console table", "side table", "end table"})
+_FRONT_HOSTS = frozenset({"sofa", "couch"})
+_OTTOMAN_HOSTS = frozenset({"sofa", "couch", "bed"})
+_SOFA_MIN_ASPECT = 1.5            # host width / height, in pixels
+
+
+def _in_front_of(piece: tuple, host: tuple) -> bool:
+    """`piece` stands on the floor in front of `host`: under its width, its
+    bottom nearer the camera, its top below the host's upper third, and no
+    taller than the host."""
+    x1, y1, x2, y2 = piece
+    hx1, hy1, hx2, hy2 = host
+    cx = (x1 + x2) / 2
+    host_h = hy2 - hy1
+    return (
+        hx1 <= cx <= hx2
+        and y2 > hy2
+        and y1 > hy1 + host_h / 3
+        and (y2 - y1) <= host_h
+        and y1 < hy2 + host_h / 2
+    )
+
+
+def relabel_by_position(dets: list[dict], tvs: list[tuple], aspect: float = 1.0) -> None:
+    """Renames in place; the old name goes to "dino_label" and CLIP leaves the
+    piece alone ("position_label")."""
+    def rename(d: dict, label: str) -> None:
+        d.setdefault("dino_label", d["label"])
+        d["label"] = label
+        d["position_label"] = True
+
+    # DINO calls a lone armchair "sofa" (CLIP corrects it later); a real sofa is
+    # far wider than tall, and a side table beside an armchair is no coffee table.
+    def hosts(labels):
+        return [
+            b for b in (d["box"] for d in dets if d["label"] in labels)
+            if d_is_wide(b)
+        ]
+
+    def d_is_wide(b: tuple) -> bool:
+        return (b[2] - b[0]) * aspect >= _SOFA_MIN_ASPECT * (b[3] - b[1])
+
+    for d in dets:
+        x1, y1, x2, y2 = d["box"]
+        if d["label"] in _TV_BENCH_LABELS and (x2 - x1) * aspect > (y2 - y1):
+            for tx1, ty1, tx2, ty2 in tvs:
+                if x1 <= (tx1 + tx2) / 2 <= x2 and _TV_GAP_MIN <= y1 - ty2 <= _TV_GAP_MAX:
+                    rename(d, "tv stand")
+                    break
+        if d.get("position_label"):
+            continue
+        if d["label"] in _COFFEE_TABLE_LABELS:
+            if any(_in_front_of(d["box"], h) for h in hosts(_FRONT_HOSTS)):
+                rename(d, "coffee table")
+        elif d["label"] == "stool":
+            if any(_in_front_of(d["box"], h) for h in hosts(_OTTOMAN_HOSTS)):
+                rename(d, "ottoman")
+
+
 # A box this far inside a doorway, standing no lower than the doorway's sill
 # (+ this share of the image height), is seen through it. A chair in front of
 # the door reaches below the sill and stays.
 _OPENING_CONTAINMENT = 0.8
 _OPENING_SILL_MARGIN = 0.01
+
+
+# Only what can stand outside is ever dropped as seen through a doorway. In
+# photos DINO also boxes a curtained window or a gallery wall as "doorway", and
+# everything inside that box went missing (24-image answer key: 22 real pieces,
+# all curtains, artwork, lamps, a nightstand and a bookshelf). What the filter
+# rightly removed in the 56 generated rooms was garden seating, plants, rugs
+# and the cushions on them. Lamps stay out of the list: a desk lamp in front of
+# a closed door was dropped, and only one garden "floor lamp" got through.
+_OUTDOOR_LABELS = frozenset({
+    "sofa", "couch", "armchair", "chair", "dining chair", "office chair", "bench", "ottoman", "stool",
+    "coffee table", "dining table", "side table", "end table", "console table",
+    "plant pot", "rug", "carpet", "pillow", "cushion", "throw pillow", "blanket",
+})
 
 
 # An opening reaching this close to the top of the photo is a glass wall or the
@@ -1151,15 +1513,51 @@ def seen_through_opening(box: tuple, openings: list[tuple]) -> bool:
 # lies this far inside that bed's or sofa's own SAM 2 mask, is part of it.
 _PART_BOX_CONTAINMENT = 0.85
 _PART_MASK_CONTAINMENT = 0.7
-# Can't stand inside a bed's or sofa's box as a piece of its own: inside that
-# box, a "mirror" or "painting" is the headboard (art above the bed hangs
-# above the box).
+# What DINO calls a bed's headboard. Folded into the bed only when shaped and
+# placed like a headboard (looks_like_headboard): the box of a four-poster or
+# canopy bed holds the wall behind it, and the box of any bed can hold the
+# photo frames on its nightstands. All 10 of these folded on the 24-image
+# answer key and the 56 generated rooms (grounding-dino-base) were real
+# mirrors and artwork, 0.06-0.15 of the bed's width; the headboards DINO
+# called "mirror" earlier spanned ~0.3 of it from the bed box's top.
 _ALWAYS_PART_LABELS = frozenset({"headboard", "mirror", "artwork", "painting"})
+_HEADBOARD_MIN_WIDTH_SHARE = 0.25   # of the bed box's width
+_HEADBOARD_MAX_TOP_GAP = 0.1        # top below the bed box's top, share of its height
+
+
+def looks_like_headboard(part: tuple, bed: tuple) -> bool:
+    px1, py1, px2, _ = part
+    bx1, by1, bx2, by2 = bed
+    return (
+        (px2 - px1) >= _HEADBOARD_MIN_WIDTH_SHARE * (bx2 - bx1)
+        and py1 - by1 <= _HEADBOARD_MAX_TOP_GAP * (by2 - by1)
+    )
 # DINO reads an armchair's seat cushion as a "stool" or "ottoman".
 _SEAT_HOSTS = frozenset({"armchair", "chair", "dining chair", "office chair"})
 _SEAT_PART_LABELS = frozenset({"ottoman", "stool"})
 _SEAT_PART_CONTAINMENT = 0.9
 _SOFT_FURNISHING_LABELS = _MASK_ONLY_LABELS | _PART_ONLY_LABELS
+
+
+# A headboard is the bed's, inside the bed's box or standing up out of its top
+# edge (DINO's bed box often stops at the mattress): most of its width over the
+# bed, reaching down into the bed's box but not past its upper part.
+_HEAD_MIN_X_OVERLAP = 0.6         # of the headboard's width
+_HEAD_MAX_BOTTOM = 0.6            # headboard bottom, share of the bed box height from its top
+
+
+def is_bed_head(head: tuple, bed: tuple) -> bool:
+    _iou, box_in = _box_iou_and_containment(head, bed)
+    if box_in >= _PART_BOX_CONTAINMENT:
+        return True
+    hx1, hy1, hx2, hy2 = head
+    bx1, by1, bx2, by2 = bed
+    x_overlap = max(0.0, min(hx2, bx2) - max(hx1, bx1)) / max(hx2 - hx1, 1e-6)
+    return (
+        x_overlap >= _HEAD_MIN_X_OVERLAP
+        and hy1 <= by1
+        and by1 < hy2 <= by1 + _HEAD_MAX_BOTTOM * (by2 - by1)
+    )
 
 
 def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
@@ -1169,7 +1567,8 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
     the smaller box, that piece would then take those pixels away from the
     bed. It is part of the bed when its box sits inside the bed's box and
     either SAM 2 already painted it as the bed or it's a kind of thing that
-    can't stand there on its own (_ALWAYS_PART_LABELS). Its mask joins the
+    is a bed's "mirror"/"artwork" shaped and placed like a headboard
+    (looks_like_headboard). Its mask joins the
     bed's, so the bed card shows its headboard; anything in front of it with a
     box of its own (a lamp on the nightstand) is cut back out in _settle_masks.
     A real bench at the foot of the bed reaches outside the bed's box and
@@ -1204,6 +1603,11 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
         mask = as_bool(det.get("mask"))
         if det not in hosts and mask is not None and mask.any():
             for host in sorted(hosts, key=area):  # the tightest host first
+                if det["label"] in _BED_PART_LABELS:
+                    if host["label"] == "bed" and is_bed_head(det["box"], host["box"]):
+                        host_of = host
+                        break
+                    continue
                 _iou, box_in = _box_iou_and_containment(det["box"], host["box"])
                 host_area = (host["box"][2] - host["box"][0]) * (host["box"][3] - host["box"][1])
                 det_area = (det["box"][2] - det["box"][0]) * (det["box"][3] - det["box"][1])
@@ -1223,7 +1627,12 @@ def merge_parts_into_hosts(dets: list[dict]) -> list[dict]:
                         break
                     continue
                 in_host_mask = (mask & host_masks[id(host)]).sum() / mask.sum()
-                if det["label"] in _ALWAYS_PART_LABELS or in_host_mask >= _PART_MASK_CONTAINMENT:
+                headboard = (
+                    det["label"] in _ALWAYS_PART_LABELS
+                    and host["label"] == "bed"
+                    and looks_like_headboard(det["box"], host["box"])
+                )
+                if headboard or in_host_mask >= _PART_MASK_CONTAINMENT:
                     host_of = host
                     break
         if host_of is None:
@@ -1288,9 +1697,94 @@ def clip_verdict(label: str, candidates: list[str], probs) -> str:
     return pick
 
 
+def _cutout_on_white(arr: Any, mask: Image.Image | None) -> Image.Image | None:
+    """The piece's mask pixels on a white square, trimmed to the mask; None
+    without a usable mask (under 50 pixels)."""
+    import numpy as np
+
+    if mask is None:
+        return None
+    m = np.asarray(mask.convert("L")) > 127
+    ys, xs = np.nonzero(m)
+    if len(xs) < 50:
+        return None
+    crop = np.where(m[..., None], arr, 255)[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    side = int(max(crop.shape[:2]) * 1.1)
+    canvas = Image.new("RGB", (side, side), "white")
+    canvas.paste(Image.fromarray(crop.astype("uint8")), ((side - crop.shape[1]) // 2, (side - crop.shape[0]) // 2))
+    return canvas
+
+
+def _padded_crop(img: Image.Image, box: tuple, pad: float = 0.6) -> Image.Image:
+    """The piece's box (0-1) plus `pad` of its size on every side, clamped."""
+    W, H = img.size
+    x1, y1, x2, y2 = box
+    bw, bh = x2 - x1, y2 - y1
+    return img.crop((
+        int(max(0.0, x1 - bw * pad) * W), int(max(0.0, y1 - bh * pad) * H),
+        int(min(1.0, x2 + bw * pad) * W), int(min(1.0, y2 + bh * pad) * H),
+    ))
+
+
+def labeler() -> str:
+    """SEGMENTATION_LABELER: "gemini" (default; CLIP for what Gemini can't
+    answer), "clip" (the old offline rule only) or "none" (DINO's label)."""
+    return os.getenv("SEGMENTATION_LABELER", "gemini").strip().lower()
+
+
+async def relabel_with_gemini(img: Image.Image, detections: list[dict]) -> set[int]:
+    """Gemini names each piece from its cut-out plus a padded crop of the room
+    (label_verification). Its answer replaces DINO's label; DINO's is kept in
+    "dino_label". Returns the indices Gemini answered, so CLIP can try the
+    rest. Never raises."""
+    import numpy as np
+
+    from label_verification import VerifyInput, label_for_type, verify_labels
+
+    arr = np.array(img.convert("RGB"))
+    W, H = img.size
+    inputs = []
+    for i, d in enumerate(detections):
+        x1, y1, x2, y2 = d["box"]
+        cut = _cutout_on_white(arr, d.get("mask"))
+        if cut is None:
+            cut = img.crop((int(x1 * W), int(y1 * H), int(x2 * W), int(y2 * H)))
+        inputs.append(VerifyInput(str(i), d["label"], cut, _padded_crop(img, d["box"])))
+    verified = await verify_labels(inputs)
+    for key, furniture_type in verified.items():
+        d = detections[int(key)]
+        new = label_for_type(d["label"], furniture_type)
+        d["label_source"] = "gemini"
+        if new != d["label"]:
+            d.setdefault("dino_label", d["label"])
+            d["label"] = new
+    return {int(k) for k in verified}
+
+
+async def name_pieces(img: Image.Image, detections: list[dict]) -> None:
+    """The naming step after SAM 2, per SEGMENTATION_LABELER: Gemini names the
+    pieces (DINO mixes up look-alike types); CLIP's offline rule only for what
+    Gemini didn't answer (no key, failure). Never raises."""
+    if labeler() == "none":
+        return
+    answered: set[int] = set()
+    if labeler() == "gemini":
+        try:
+            answered = await relabel_with_gemini(img, detections)
+        except Exception as exc:  # a second opinion must never fail the request
+            print(f"[segmentation] Gemini relabel skipped: {exc}")
+    rest = [d for i, d in enumerate(detections) if i not in answered]
+    if rest:
+        try:
+            await asyncio.to_thread(relabel_with_clip, img, rest)
+        except Exception as exc:
+            print(f"[segmentation] CLIP relabel skipped: {exc}")
+
+
 def relabel_with_clip(img: Image.Image, detections: list[dict]) -> None:
     """Run clip_verdict on each piece's cut-out, on white like product matching
-    sees it. Keeps DINO's label in "dino_label" when it changes."""
+    sees it. Keeps DINO's label in "dino_label" when it changes. Since
+    2026-11-21 only the fallback for pieces Gemini didn't answer."""
     import numpy as np
 
     model = _get_clip()
@@ -1299,16 +1793,11 @@ def relabel_with_clip(img: Image.Image, detections: list[dict]) -> None:
     arr = np.array(img.convert("RGB"))
     for d in detections:
         cands = clip_candidates(d["label"])
-        if not cands or d.get("mask") is None:
+        if not cands or d.get("mask") is None or d.get("position_label"):
             continue
-        m = np.asarray(d["mask"].convert("L")) > 127
-        ys, xs = np.nonzero(m)
-        if len(xs) < 50:
+        canvas = _cutout_on_white(arr, d["mask"])
+        if canvas is None:
             continue
-        crop = np.where(m[..., None], arr, 255)[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
-        side = int(max(crop.shape[:2]) * 1.1)
-        canvas = Image.new("RGB", (side, side), "white")
-        canvas.paste(Image.fromarray(crop.astype("uint8")), ((side - crop.shape[1]) // 2, (side - crop.shape[0]) // 2))
         with _inference_lock:
             v = model.encode(canvas, normalize_embeddings=True)
             text = model.encode(
@@ -1322,19 +1811,26 @@ def relabel_with_clip(img: Image.Image, detections: list[dict]) -> None:
         if new != d["label"]:
             d["dino_label"] = d["label"]
             d["label"] = new
+            d["label_source"] = "clip"
 
 
 # A piece left with less than this share of its own mask after the overlap
 # split was a second box on something else (a lamp's shade reported as a
 # "pendant lamp"); as a card it would fall back to a bare rectangle.
 _MIN_KEPT_MASK_SHARE = 0.3
+# The same after split_contested, which takes more: the office chair behind a
+# desk keeps only its back (24%) and is still a card. A box on part of another
+# piece (flowers in a vase as "chandelier", a drawing inside its frame) keeps
+# next to nothing.
+_MIN_KEPT_CONTESTED_SHARE = 0.1
 
 
-def _settle_masks(detections: list[dict], W: int, H: int) -> None:
-    """Split shared pixels between overlapping masks, then grow each box to
-    cover its whole mask — the padded SAM 2 prompt may reach past DINO's box,
-    and the crop/cut-out are cut from the box. Marks `swallowed` on a piece
-    that lost most of its mask."""
+def _settle_masks(detections: list[dict], W: int, H: int, ask=None) -> None:
+    """Split shared pixels between overlapping masks so that no pixel is in
+    two (`ask` as in split_contested), then grow each box to cover its whole
+    mask — the padded SAM 2 prompt may reach past DINO's box, and the
+    crop/cut-out are cut from the box. Marks `swallowed` on a piece that lost
+    most of its mask."""
     import numpy as np
 
     with_masks = [d for d in detections if d["mask"] is not None]
@@ -1344,8 +1840,13 @@ def _settle_masks(detections: list[dict], W: int, H: int) -> None:
         d["mask"] = np.asarray(d["mask"].convert("L")) > 127
     before = [int(d["mask"].sum()) for d in with_masks]
     resolve_overlaps(with_masks)
-    for d, area in zip(with_masks, before):
-        d["swallowed"] = area > 0 and d["mask"].sum() < area * _MIN_KEPT_MASK_SHARE
+    behind = [int(d["mask"].sum()) for d in with_masks]
+    split_contested(with_masks, ask)
+    for d, area, area_behind in zip(with_masks, before, behind):
+        d["swallowed"] = area > 0 and (
+            area_behind < area * _MIN_KEPT_MASK_SHARE
+            or d["mask"].sum() < area * _MIN_KEPT_CONTESTED_SHARE
+        )
     for d in with_masks:
         extent = mask_bbox(d["mask"], W, H)
         if extent is not None:
@@ -1354,6 +1855,31 @@ def _settle_masks(detections: list[dict], W: int, H: int) -> None:
                 max(d["box"][2], extent[2]), max(d["box"][3], extent[3]),
             )
         d["mask"] = Image.fromarray(d["mask"].astype("uint8") * 255, mode="L")
+
+
+def _settle_masks_with_sam2(img: Image.Image, detections: list[dict]) -> None:
+    """_settle_masks, with SAM 2 point prompts for the patches two similar-sized
+    pieces share. The image is encoded again only if a patch comes up (none in
+    most rooms); the lock keeps another request from swapping it mid-way."""
+    import numpy as np
+    import torch
+
+    predictor, device = _get_sam2_predictor()
+    encoded = False
+
+    def ask(x: int, y: int):
+        nonlocal encoded
+        if not encoded:
+            predictor.set_image(np.array(img.convert("RGB")))
+            encoded = True
+        masks, _scores, _logits = predictor.predict(
+            point_coords=np.array([[x, y]], dtype=float), point_labels=np.array([1]),
+            multimask_output=True,
+        )
+        return masks > 0
+
+    with _inference_lock, torch.inference_mode(), _autocast(device):
+        _settle_masks(detections, *img.size, ask=ask)
 
 
 def _decode_data_url_image(data_url: str) -> Image.Image:
@@ -1436,15 +1962,15 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
         mask_imgs = [None] * len(raw)
 
     detections, mask_only = select_detections(raw, mask_imgs, W, H)
-    _settle_masks(detections + mask_only, W, H)
+    if method == "grounding_dino_sam2":
+        await asyncio.to_thread(_settle_masks_with_sam2, img, detections + mask_only)
+    else:
+        _settle_masks(detections + mask_only, W, H)  # Gemini boxes have no masks
     # Largest first, so the big pieces (sofa, bed) lead a list of cards
     # instead of a stray vase.
     detections = [d for d in detections if not d.get("swallowed")]
     if method == "grounding_dino_sam2":
-        try:
-            await asyncio.to_thread(relabel_with_clip, img, detections)
-        except Exception as exc:  # a second opinion must never fail the request
-            print(f"[segmentation] CLIP relabel skipped: {exc}")
+        await name_pieces(img, detections)
     detections.sort(
         key=lambda d: (d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1]), reverse=True
     )
@@ -1453,6 +1979,9 @@ async def run_segmentation(image_bytes: bytes, mime_type: str) -> SegmentationRe
         _build_item(img, d["label"], d["confidence"], idx, *d["box"], d["mask"])
         for idx, d in enumerate(detections)
     ]
+    for item, d in zip(items, detections):
+        item.dino_label = d.get("dino_label")
+        item.label_source = d.get("label_source", "dino")
 
     await _enrich_items(items)
 
