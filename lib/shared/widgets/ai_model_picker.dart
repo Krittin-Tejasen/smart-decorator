@@ -139,6 +139,8 @@ class AiModelPicker extends StatelessWidget {
         return Icons.bolt_rounded;
       case 'gemini':
         return Icons.auto_awesome_rounded;
+      case 'openrouter':
+        return Icons.palette_outlined;
       default:
         return Icons.tune_rounded;
     }

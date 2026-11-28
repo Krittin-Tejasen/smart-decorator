@@ -24,6 +24,7 @@ FurnitureItem furniture(
   bool cutout = true,
   bool crop = true,
   List<String> colors = const ['#725f4e', '#98826e'],
+  FurnitureFeatures? features,
 }) {
   return FurnitureItem(
     id: id,
@@ -34,7 +35,7 @@ FurnitureItem furniture(
     cutoutImage: cutout ? kSampleCutoutDataUrl : null,
     maskImage: '',
     maskPrecise: cutout,
-    features: FurnitureFeatures(dominantColors: colors, areaPct: 5, aspectRatio: 1),
+    features: features ?? FurnitureFeatures(dominantColors: colors, areaPct: 5, aspectRatio: 1),
   );
 }
 
@@ -50,8 +51,18 @@ class ControlledService implements ProductMatchService {
   final Future<List<ProductMatch>> Function(FurnitureItem item, int callNumber) onCall;
   int calls = 0;
 
+  /// The `filter` of every call, in order.
+  final filters = <MatchFilter>[];
+
   @override
-  Future<List<ProductMatch>> matchesFor(FurnitureItem item, {PriceRange? price}) => onCall(item, ++calls);
+  Future<List<ProductMatch>> matchesFor(
+    FurnitureItem item, {
+    PriceRange? price,
+    MatchFilter filter = MatchFilter.none,
+  }) {
+    filters.add(filter);
+    return onCall(item, ++calls);
+  }
 }
 
 late GoRouter router;
@@ -189,6 +200,44 @@ void main() {
     });
   });
 
+  group('extracted material and colour', () {
+    testWidgets('the header shows the item\'s materials and colour name', (tester) async {
+      usePhone(tester);
+      final features = FurnitureFeatures(
+        dominantColors: const ['#6d422c'],
+        areaPct: 5,
+        aspectRatio: 1,
+        materials: [
+          MaterialGuess(name: 'ceramic', confidence: 0.95),
+          MaterialGuess(name: 'wood', confidence: 0.3),
+        ],
+        colorName: 'terracotta',
+        source: 'gemini',
+      );
+      await tester.pumpWidget(appWith([furniture('vase', features: features)]));
+      await settle(tester);
+
+      await tapCard(tester, 'Vase');
+
+      expect(find.byKey(const ValueKey('detected-traits')), findsOneWidget);
+      expect(find.text('Ceramic, Wood · terracotta'), findsOneWidget);
+    });
+
+    test('describeTraits copes with a colour name only, a material only, or nothing', () {
+      FurnitureFeatures with_({List<MaterialGuess> m = const [], String? name}) => FurnitureFeatures(
+            dominantColors: const [],
+            areaPct: 1,
+            aspectRatio: 1,
+            materials: m,
+            colorName: name,
+          );
+
+      expect(describeTraits(with_(name: 'beige')), 'beige');
+      expect(describeTraits(with_(m: [MaterialGuess(name: 'leather', confidence: 1)])), 'Leather');
+      expect(describeTraits(with_()), isNull);
+    });
+  });
+
   group('tapping a card opens that item\'s matching products', () {
     testWidgets('shows the item, a clear sample-data notice and three numbered products', (tester) async {
       usePhone(tester);
@@ -204,6 +253,9 @@ void main() {
           reason: 'app bar title + header');
       expect(find.text('Detected in your design'), findsOneWidget);
       expect(find.descendant(of: page, matching: find.byKey(const ValueKey('furniture-crop'))), findsOneWidget);
+
+      // nothing extracted -> no material/colour line is invented
+      expect(find.byKey(const ValueKey('detected-traits')), findsNothing);
 
       // it is obvious this is not real matching
       expect(find.text('Matching products'), findsOneWidget);
@@ -364,6 +416,186 @@ void main() {
 
       expect(find.byType(ChoiceChip), findsNothing);
       expect(find.text('Any price'), findsNothing);
+    });
+  });
+
+  group('filter by colour / material', () {
+    const real = ProductMatch(
+      id: 'real-1', name: 'KIVIK 3-seat sofa', price: 19990, category: 'Sofa', score: 0.91,
+    );
+
+    final withFeatures = FurnitureFeatures(
+      dominantColors: const ['#6d422c'],
+      areaPct: 5,
+      aspectRatio: 1,
+      colors: [MeasuredColor(hex: '#6d422c', catalogColor: 'brown', share: 1)],
+      materials: [MaterialGuess(name: 'wood', confidence: 0.9)],
+      source: 'gemini',
+    );
+
+    Switch switchOf(WidgetTester tester, String key) => tester.widget<Switch>(find.byKey(ValueKey(key)));
+
+    Future<ControlledService> openMatches(
+      WidgetTester tester,
+      FurnitureItem item, {
+      Future<List<ProductMatch>> Function(FurnitureItem, int)? onCall,
+    }) async {
+      usePhone(tester);
+      final service = ControlledService(onCall ?? (_, _) async => const [real]);
+      await tester.pumpWidget(appWith([item], service: service));
+      await settle(tester);
+      await tapCard(tester, 'Sofa');
+      return service;
+    }
+
+    testWidgets('both are sliding switches that start off, so the first search has no filter', (tester) async {
+      final service = await openMatches(tester, furniture('sofa', features: withFeatures));
+
+      expect(service.filters, [MatchFilter.none]);
+      expect(switchOf(tester, 'use-colour').value, isFalse);
+      expect(switchOf(tester, 'use-material').value, isFalse);
+      expect(switchOf(tester, 'use-colour').onChanged, isNotNull);
+      expect(find.text('Colour'), findsOneWidget);
+      expect(find.text('Material'), findsOneWidget);
+    });
+
+    testWidgets('colour and material switch on separately and search again with that filter', (tester) async {
+      final service = await openMatches(tester, furniture('sofa', features: withFeatures));
+
+      await tester.tap(find.byKey(const ValueKey('use-colour')));
+      await settle(tester);
+      expect(service.filters.last, const MatchFilter(colour: true));
+      expect(switchOf(tester, 'use-colour').value, isTrue);
+      expect(switchOf(tester, 'use-material').value, isFalse);
+
+      await tester.tap(find.byKey(const ValueKey('use-material')));
+      await settle(tester);
+      expect(service.filters.last, MatchFilter.all);
+
+      await tester.tap(find.byKey(const ValueKey('use-colour')));
+      await settle(tester);
+      expect(service.filters.last, const MatchFilter(material: true));
+      expect(service.calls, 4);
+      expect(find.text('KIVIK 3-seat sofa'), findsOneWidget);
+    });
+
+    testWidgets('a switch is unavailable when that feature was not extracted', (tester) async {
+      await openMatches(tester, furniture('sofa'));  // no colours or materials
+
+      expect(switchOf(tester, 'use-colour').onChanged, isNull);
+      expect(switchOf(tester, 'use-material').onChanged, isNull);
+      expect(switchOf(tester, 'use-colour').value, isFalse);
+      expect(find.text('Not available for this item'), findsNWidgets(2));
+    });
+
+    testWidgets('colour is available without a material guess, and not the other way round', (tester) async {
+      final onlyColour = FurnitureFeatures(
+        dominantColors: const ['#6d422c'],
+        areaPct: 5,
+        aspectRatio: 1,
+        colors: [MeasuredColor(hex: '#6d422c', catalogColor: 'brown', share: 1)],
+      );
+      await openMatches(tester, furniture('sofa', features: onlyColour));
+
+      expect(switchOf(tester, 'use-colour').onChanged, isNotNull);
+      expect(switchOf(tester, 'use-material').onChanged, isNull);
+    });
+
+    testWidgets('a material the catalog has no tag for cannot be filtered on', (tester) async {
+      final ceramic = FurnitureFeatures(
+        dominantColors: const [],
+        areaPct: 5,
+        aspectRatio: 1,
+        materials: [MaterialGuess(name: 'ceramic', confidence: 0.95)],
+        source: 'gemini',
+      );
+      await openMatches(tester, furniture('sofa', features: ceramic));
+
+      expect(switchOf(tester, 'use-material').onChanged, isNull);
+    });
+
+    testWidgets('rattan and leather can, through the wood and fabric tags', (tester) async {
+      for (final name in ['rattan', 'leather']) {
+        expect(
+          FurnitureFeatures(
+            dominantColors: const [], areaPct: 1, aspectRatio: 1,
+            materials: [MaterialGuess(name: name, confidence: 0.9)],
+          ).canFilterByMaterial,
+          isTrue,
+          reason: name,
+        );
+      }
+    });
+
+    testWidgets('both are unavailable for a cut-out the model called not a real item', (tester) async {
+      final unusable = FurnitureFeatures(
+        dominantColors: const [],
+        areaPct: 5,
+        aspectRatio: 1,
+        colors: withFeatures.colors,
+        materials: withFeatures.materials,
+        source: 'gemini',
+        usable: false,
+      );
+      await openMatches(tester, furniture('sofa', features: unusable));
+
+      expect(switchOf(tester, 'use-colour').onChanged, isNull);
+      expect(switchOf(tester, 'use-material').onChanged, isNull);
+    });
+
+    testWidgets('sample data has nothing to filter, so no switches', (tester) async {
+      usePhone(tester);
+      await tester.pumpWidget(appWith([furniture('sofa', features: withFeatures)]));
+      await settle(tester);
+      await tapCard(tester, 'Sofa');
+
+      expect(find.text('Sofa #1'), findsOneWidget);
+      expect(find.byKey(const ValueKey('use-colour')), findsNothing);
+      expect(find.byKey(const ValueKey('use-material')), findsNothing);
+    });
+
+    testWidgets('the setting carries over to the next item you open', (tester) async {
+      usePhone(tester);
+      final service = ControlledService((_, _) async => const [real]);
+      await tester.pumpWidget(appWith([
+        furniture('sofa', features: withFeatures),
+        furniture('armchair', id: '1', features: withFeatures),
+      ], service: service));
+      await settle(tester);
+
+      await tapCard(tester, 'Sofa');
+      await tester.tap(find.byKey(const ValueKey('use-colour')));
+      await settle(tester);
+      router.pop();
+      await settle(tester);
+
+      await tapCard(tester, 'Armchair');
+      expect(service.filters.last, const MatchFilter(colour: true));
+      expect(switchOf(tester, 'use-colour').value, isTrue);
+    });
+
+    testWidgets('when the filter leaves nothing, the page says so and suggests switching it off', (tester) async {
+      final service = await openMatches(
+        tester,
+        furniture('sofa', features: withFeatures),
+        onCall: (_, call) async => call == 1 ? const [real] : const [],
+      );
+      expect(find.byKey(const ValueKey('filter-hint')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('use-colour')));
+      await settle(tester);
+
+      expect(service.filters.last, const MatchFilter(colour: true));
+      expect(find.text('No matching products found'), findsOneWidget);
+      expect(find.byKey(const ValueKey('filter-hint')), findsOneWidget);
+      expect(find.text('Try switching off the colour or material filter.'), findsOneWidget);
+    });
+
+    testWidgets('no filter hint for an empty result when no filter is on', (tester) async {
+      await openMatches(tester, furniture('sofa', features: withFeatures), onCall: (_, _) async => const []);
+
+      expect(find.text('No matching products found'), findsOneWidget);
+      expect(find.byKey(const ValueKey('filter-hint')), findsNothing);
     });
   });
 

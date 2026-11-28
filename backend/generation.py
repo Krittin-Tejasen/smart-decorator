@@ -11,8 +11,9 @@ POST /generate-room
 Image providers (chosen via AI_IMAGE_PROVIDER env var):
   • gemini      — Gemini image generation (default)
   • replicate   — Replicate (e.g. google/nano-banana-2)
+  • openrouter  — OpenRouter (model set by OPENROUTER_MODEL, e.g. Muse Image)
   • mock        — echoes the uploaded photo with a watermark; no API call,
-                  used when Gemini/Replicate credentials aren't set up yet
+                  used when Gemini/Replicate/OpenRouter credentials aren't set up yet
 """
 
 import asyncio
@@ -492,6 +493,66 @@ async def generate_with_gemini(prompt: str, image_bytes: bytes, mime_type: str) 
     raise HTTPException(status_code=502, detail="Gemini did not return an image.")
 
 
+async def generate_with_openrouter(prompt: str, image_bytes: bytes, mime_type: str) -> str:
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    model = os.getenv("OPENROUTER_MODEL")
+
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENROUTER_API_KEY is not configured on the backend.",
+        )
+    if not model:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENROUTER_MODEL is not configured on the backend.",
+        )
+
+    # Dedicated image endpoint (not chat/completions): this is the shape that
+    # worked when comparing models for meta/muse-image and the other image models.
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "input_references": [
+            {
+                "type": "image_url",
+                "image_url": {"url": build_data_url(image_bytes, mime_type)},
+            },
+        ],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/images",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            response_data = response.json()
+    except httpx.HTTPStatusError as exc:
+        print(exc.response.text)
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenRouter generation failed: {exc.response.text}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OpenRouter generation failed: {exc}") from exc
+
+    print(f"[openrouter] model={model} cost=${response_data.get('usage', {}).get('cost')}")
+
+    data = response_data.get("data") or []
+    if data and data[0].get("b64_json"):
+        media_type = data[0].get("media_type", "image/png")
+        return f"data:{media_type};base64,{data[0]['b64_json']}"
+
+    print(response_data)
+    raise HTTPException(status_code=502, detail="OpenRouter did not return an image.")
+
+
 async def generate_with_replicate(prompt: str, image_bytes: bytes, mime_type: str) -> str:
     token = os.getenv("REPLICATE_API_TOKEN")
     model = os.getenv("REPLICATE_MODEL", "google/nano-banana-2")
@@ -709,6 +770,8 @@ async def run_generate_room(
             return await generate_with_replicate(prompt, image_bytes, mime_type)
         if provider == "gemini":
             return await generate_with_gemini(prompt, image_bytes, mime_type)
+        if provider == "openrouter":
+            return await generate_with_openrouter(prompt, image_bytes, mime_type)
         raise HTTPException(
             status_code=500,
             detail=f"Unsupported AI_IMAGE_PROVIDER: {provider}",
