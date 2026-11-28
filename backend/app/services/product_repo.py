@@ -8,7 +8,7 @@ from supabase import Client, create_client
 
 from app.core.config import settings
 
-TABLE_NAME = "ikea_furniture"
+TABLE_NAME = "ikea_furniture_v2"
 PAGE_SIZE = 1000
 
 
@@ -58,7 +58,7 @@ def fetch_product_by_id(unique_id: str) -> dict[str, Any] | None:
 # measurements, search_context...) stay in the database.
 CARD_COLUMNS = (
     "unique_id,sku,main_title,main_image,category,url,in_stock,thb_price,"
-    "width_cm,height_cm,depth_cm,color_extracted,material_tag,material_tags,country_code"
+    "width_cm,height_cm,depth_cm,color_extracted,measured_color,material_tag,material_tags,country_code"
 )
 
 

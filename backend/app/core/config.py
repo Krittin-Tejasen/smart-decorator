@@ -23,7 +23,10 @@ class Settings(BaseSettings):
     )
 
     pinecone_api_key: str | None = None
-    pinecone_index_name: str = "ikea-products"
+    # Must stay paired with product_repo.TABLE_NAME (ikea_furniture_v2): the
+    # two tables'/indexes' ids differ, so matching one against the other
+    # resolves to the wrong product entirely.
+    pinecone_index_name: str = "ikea-products-v2"
     pinecone_cloud: str = "aws"
     pinecone_region: str = "us-east-1"
 

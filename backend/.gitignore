@@ -15,3 +15,7 @@ compare/
 
 # Local progress/snapshots of the scripts/ catalog jobs
 scripts/.*.json
+
+# Full-table/Pinecone backups taken before a catalog data migration (large,
+# never committed — see scripts/backup_catalog.py / backup_pinecone.py)
+catalog_backups/

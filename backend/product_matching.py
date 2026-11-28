@@ -203,7 +203,7 @@ def to_product_match(candidate: Candidate, link_ok: bool | None) -> dict[str, An
         "width_cm": _as_float(row.get("width_cm")),
         "depth_cm": _as_float(row.get("depth_cm")),
         "height_cm": _as_float(row.get("height_cm")),
-        "color_name": row.get("color_extracted") or None,
+        "color_name": row.get("measured_color") or row.get("color_extracted") or None,
         "material": material_label(row),
         "in_stock": bool(row.get("in_stock")),
         "url": row.get("url") or None,
@@ -381,5 +381,5 @@ async def match_products(
         "matches": await pick_with_live_links(result.candidates, top_k),
         "needs_type": False,
         # Which of the user's filters were applied (they are never relaxed).
-        "filters": [name for name, key in (("color", "color"), ("material", "$or")) if key in extra_filter],
+        "filters": [name for name, key in (("color", "measured_color"), ("material", "$or")) if key in extra_filter],
     }
